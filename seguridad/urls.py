@@ -6,5 +6,4 @@ urlpatterns = [
     path("salir/", views.logout_view, name="logout"),
     path("admin/", views.admin_home, name="admin_home"),
     path("empleado/", views.empleado_home, name="empleado_home"),
-    path("empleados/registrar/", views.crear_empleado, name="registrar_empleado"),  # opcional, sólo admin
-]
+    path("empleados/registrar/", views.crear_empleado, name="registrar_empleado"),  
