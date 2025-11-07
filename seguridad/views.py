@@ -3,18 +3,18 @@ from functools import wraps
 from django.shortcuts import render, redirect
 from django.views.decorators.csrf import csrf_protect
 from django.contrib.auth.hashers import check_password, make_password
-from django.contrib.auth import logout as auth_logout   # 👈 faltaba este import
+from django.contrib.auth import logout as auth_logout   
 from django.utils import timezone
 
 from biblio.models import Usuarios, Roles, Libros, Prestamos
 
 
-# ---------- Helpers de sesión / roles ----------
+# ---------- Inicios de sesión / roles ----------
 def _is_logged(request):
     return request.session.get("usuario_id") is not None
 
 def _role(request):
-    # "administrador" | "empleado" (según Roles.nombre)
+    # "administrador" | "empleado"
     return request.session.get("rol")
 
 def require_role(*allowed):
@@ -44,10 +44,10 @@ def _map_front_rol(rol_front: str) -> str:
     return ""
 
 
-# ---------- Login / Logout (empleados/admin) ----------
+# ---------- Login / Logout ----------
 @csrf_protect
 def login_view(request):
-    # Si ya tiene sesión, lo mandamos a su panel
+    # Si ya tiene sesión, lo mandamos a su inicio
     if _is_logged(request):
         return redirect("admin_home" if _role(request) == "administrador" else "empleado_home")
 
@@ -75,7 +75,7 @@ def login_view(request):
             ctx["error"] = "Credenciales incorrectas. Intenta nuevamente."
             return render(request, "seguridad/login_empleados.html", ctx)
 
-        # Soporta hash y texto plano (temporal)
+    
         clave_db = user.clave or ""
         if clave_db.startswith(("pbkdf2_", "argon2$", "bcrypt$")):
             ok = check_password(password, clave_db)
@@ -86,10 +86,10 @@ def login_view(request):
             ctx["error"] = "Credenciales incorrectas. Intenta nuevamente."
             return render(request, "seguridad/login_empleados.html", ctx)
 
-        # Login OK: guardamos mínimos en sesión
+        # Login OK
         request.session["usuario_id"] = user.id
         request.session["usuario_email"] = user.email
-        request.session["rol"] = user.rol.nombre  # "administrador" | "empleado"
+        request.session["rol"] = user.rol.nombre 
         # 14 días si marcó "Recordar sesión"
         request.session.set_expiry(60 * 60 * 24 * 14 if remember == "on" else 0)
 
@@ -130,7 +130,7 @@ def admin_home(request):
     ctx = {
         "current_user": current_user,
         "total_libros": total_libros,
-        "ventas_mensuales": None,  # aún no hay tabla de ventas
+        "ventas_mensuales": None, 
         "empleados_activos": empleados_activos,
         "alertas": alertas,
         "empleados": empleados,
@@ -187,7 +187,7 @@ def crear_empleado(request):
             nombre=nombre,
             apellido=apellido,
             email=email,
-            clave=make_password(clave),  # guarda hash
+            clave=make_password(clave),  
             estado=estado,
         )
         ctx["ok"] = f"Empleado creado: {email}"
@@ -196,7 +196,7 @@ def crear_empleado(request):
     return render(request, "seguridad/registrar_empleados.html", ctx)
 
 
-# ---------- Compat con nombres usados en urls ----------
+# ---------- nombres usados en urls ----------
 def inicio_sesion(request):
     """Alias si alguna plantilla aún llama a 'inicio_sesion'."""
     return render(request, "seguridad/login_empleados.html")
@@ -206,12 +206,13 @@ def cerrar_sesion(request):
     """
     Cierra la sesión y limpia cualquier flag custom, luego vuelve al inicio público.
     """
-    auth_logout(request)  # Django auth logout
+    auth_logout(request)  
     for key in ("empleado_id", "usuario_id", "current_user_id", "rol", "is_admin", "usuario_email"):
         request.session.pop(key, None)
 
-    # Redirige a la portada pública
+    # Redirige al inicio
     try:
         return redirect("inicio")  # definido en biblio.urls
     except Exception:
-        return redirect("/")       # fallback
+        return redirect("/")       
+
