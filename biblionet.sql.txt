@@ -140,3 +140,17 @@ SELECT
 FROM libros l
 LEFT JOIN ejemplares e ON l.id = e.libro_id
 GROUP BY l.id;
+
+-- ==============================
+-- Base de datos de prueba
+-- ==============================
+
+CREATE DATABASE IF NOT EXISTS test_biblionet
+  DEFAULT CHARACTER SET utf8mb4
+  DEFAULT COLLATE utf8mb4_general_ci;
+
+GRANT ALL PRIVILEGES ON test_biblionet.* TO 'biblio'@'localhost' IDENTIFIED BY 'root';
+FLUSH PRIVILEGES;
+
+SHOW GRANTS FOR 'biblio'@'127.0.0.1';
+
