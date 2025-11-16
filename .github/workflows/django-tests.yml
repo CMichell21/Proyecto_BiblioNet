@@ -15,4 +15,41 @@ jobs:
       - name: List files in the repository
         run: |
           ls ${{ github.workspace }}
+<<<<<<< HEAD
+=======
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Django dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install django
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      
+      - name: Run Django migrations
+        run: |
+          python manage.py makemigrations --noinput
+          python manage.py migrate --noinput
+        env:
+          DJANGO_SETTINGS_MODULE: core.settings
+      
+      - name: Run Django tests
+        run: |
+          python manage.py test
+        env:
+          DJANGO_SETTINGS_MODULE: core.settings
+          DEBUG: 'False'
+          SECRET_KEY: 'dummy-key-for-testing'
+      
+      - name: Run specific app tests
+        run: |
+          echo "Ejecutando pruebas de todas las apps..."
+          python manage.py test biblio --verbosity=2
+          python manage.py test seguridad --verbosity=2
+        env:
+          DJANGO_SETTINGS_MODULE: core.settings
+>>>>>>> 3c80710fdd0f5a2eac0baf16f0e7866504a1debb
       - run: echo "🍏 This job's status is ${{ job.status }}."
