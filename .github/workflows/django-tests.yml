@@ -49,5 +49,5 @@ jobs:
           python manage.py test seguridad --verbosity=2
         env:
           DJANGO_SETTINGS_MODULE: core.settings
->>>>>>> 3c80710fdd0f5a2eac0baf16f0e7866504a1debb
+
       - run: echo "🍏 This job's status is ${{ job.status }}."
