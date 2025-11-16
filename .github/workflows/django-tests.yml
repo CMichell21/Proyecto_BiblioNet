@@ -15,8 +15,6 @@ jobs:
       - name: List files in the repository
         run: |
           ls ${{ github.workspace }}
-<<<<<<< HEAD
-=======
 
       - name: Set up Python
         uses: actions/setup-python@v5
