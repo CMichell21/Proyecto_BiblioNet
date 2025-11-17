@@ -32,10 +32,9 @@ jobs:
           echo "🗄️ Creando base de datos de pruebas..."
           sudo mysql -e "CREATE DATABASE IF NOT EXISTS test_db;"
 
-          echo "👤 Ajustando usuario root sin contraseña..."
-          sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '';"
-          sudo mysql -e "FLUSH PRIVILEGES;"
-
+          echo "👤 Verificando usuarios MySQL..."
+          sudo mysql -uroot -proot -e "SELECT user, host, plugin FROM mysql.user;"
+          
           echo "✅ MySQL database created successfully"
 
       - name: Set up Python
@@ -60,7 +59,7 @@ jobs:
           DB_ENGINE: django.db.backends.mysql
           DB_NAME: test_db
           DB_USER: root
-          DB_PASSWORD: ''
+          DB_PASSWORD: 'root'
           DB_HOST: localhost
           DB_PORT: 3306
       
@@ -73,7 +72,7 @@ jobs:
           DB_ENGINE: django.db.backends.mysql
           DB_NAME: test_db
           DB_USER: root
-          DB_PASSWORD: ''
+          DB_PASSWORD: 'root'
           DB_HOST: localhost
           DB_PORT: 3306
           DEBUG: 'False'
@@ -90,7 +89,7 @@ jobs:
           DB_ENGINE: django.db.backends.mysql
           DB_NAME: test_db
           DB_USER: root
-          DB_PASSWORD: ''
+          DB_PASSWORD: 'root'
           DB_HOST: localhost
           DB_PORT: 3306
 
