@@ -26,16 +26,24 @@ jobs:
           echo "🔧 Iniciando servicio MySQL..."
           sudo systemctl start mysql
 
+          echo "⌛ Esperando a que MySQL responda..."
+          # Esperar a que MySQL esté listo
+          until sudo mysqladmin ping --silent; do
+            sleep 1
+          done
+
           echo "📋 Estado de MySQL:"
           sudo systemctl status mysql || true
 
           echo "🗄️ Creando base de datos de pruebas..."
-          sudo mysql -e "CREATE DATABASE IF NOT EXISTS test_db;"
+          # 👇 AQUÍ ES LA CLAVE: usuario root + password root
+          sudo mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS test_db;"
 
           echo "👤 Verificando usuarios MySQL..."
           sudo mysql -uroot -proot -e "SELECT user, host, plugin FROM mysql.user;"
-          
-          echo "✅ MySQL database created successfully"
+
+          echo "✅ MySQL listo para usar en los tests"
+
 
       - name: Set up Python
         uses: actions/setup-python@v5
