@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.urls import path, include
+from seguridad import views as seguridad_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -12,4 +13,5 @@ urlpatterns = [
     path("", include("biblio.urls")),      # Inicio, catálogo, login cliente…
     path("", include("seguridad.urls")),   # Login empleados y panel admin
 ]
+
 
