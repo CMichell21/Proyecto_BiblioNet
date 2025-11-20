@@ -1,4 +1,6 @@
 from functools import wraps
+from datetime import datetime, timedelta
+
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.csrf import csrf_protect
 from django.contrib.auth.hashers import check_password, make_password
@@ -6,8 +8,19 @@ from django.contrib.auth import logout as auth_logout
 from django.utils import timezone
 from django.contrib import messages
 from django.core.paginator import Paginator
+from django.db.models import Q
+import random
 
-from biblio.models import Usuarios, Roles, Libros, Prestamos, Bitacora, Libros
+from biblio.models import (
+    Usuarios,
+    Roles,
+    Libros,
+    Prestamos,
+    Bitacora,
+    ReglasPrestamo,
+    Clientes,
+    Ejemplares,
+)
 
 # ---------- Helpers de sesión / roles ----------
 def _usuario_autenticado(request):
@@ -37,17 +50,10 @@ def _redirigir_segun_rol(rol):
         return redirect('panel_bibliotecario')
     
     
-
 @csrf_protect
 def iniciar_sesion_empleado(request):
-    if _usuario_autenticado(request):
-        rol_actual = _obtener_rol_usuario(request)
-        if rol_actual == "administrador":
-            return redirect("panel_administrador")
-        else:
-            return redirect("panel_bibliotecario")
-    
     contexto = {"error": None}
+
     if request.method == "POST":
         correo = request.POST.get("email", "").strip()
         contrasena = request.POST.get("password", "")
@@ -76,7 +82,6 @@ def iniciar_sesion_empleado(request):
             contexto["error"] = "Credenciales incorrectas. Intenta nuevamente."
             return render(request, "seguridad/login_empleados.html", contexto)
 
-        # Verificar contraseña
         contrasena_bd = usuario.clave or ""
         if contrasena_bd.startswith(("pbkdf2_", "argon2$", "bcrypt$")):
             coincide = check_password(contrasena, contrasena_bd)
@@ -87,7 +92,7 @@ def iniciar_sesion_empleado(request):
             contexto["error"] = "Credenciales incorrectas. Intenta nuevamente."
             return render(request, "seguridad/login_empleados.html", contexto)
 
-        # Login exitoso
+        # Login exitoso: pisamos cualquier sesión previa
         request.session["id_usuario"] = usuario.id
         request.session["correo_usuario"] = usuario.email
         request.session["rol_usuario"] = usuario.rol.nombre
@@ -100,8 +105,20 @@ def iniciar_sesion_empleado(request):
 
     return render(request, "seguridad/login_empleados.html", contexto)
 
+
 def cerrar_sesion_empleado(request):
+    # Por si en algún momento se usa el sistema de auth de Django
+    auth_logout(request)
+
+    # Borrar claves específicas que usamos para empleados
+    for key in ["id_usuario", "correo_usuario", "rol_usuario"]:
+        if key in request.session:
+            del request.session[key]
+
+    # Vaciar por completo la sesión y regenerar la cookie
     request.session.flush()
+
+    messages.success(request, "Sesión de empleado cerrada correctamente.")
     return redirect("inicio_sesion")
 
 # ---------- Paneles ----------
@@ -238,6 +255,68 @@ def registrar_empleado(request):
 
     return render(request, "seguridad/registrar_empleados.html", contexto)
 
+@requerir_rol("administrador")
+@csrf_protect
+def configurar_reglas_prestamo(request):
+    """
+    Vista para que el administrador configure las reglas generales de préstamo.
+    Usa la última regla registrada o crea una nueva si no existe.
+    """
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(
+            id=request.session.get("id_usuario")
+        )
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    # Tomamos la última regla (puede ser la única) o None si no existe
+    regla = ReglasPrestamo.objects.order_by("-fecha_actualizacion").first()
+
+    if request.method == "POST":
+        plazo_dias = request.POST.get("plazo_dias")
+        limite_prestamos = request.POST.get("limite_prestamos")
+        tarifa_mora_diaria = request.POST.get("tarifa_mora_diaria")
+        # si después quieres descripción adicional, la agregamos; por ahora lo simplificamos
+        descripcion = "Reglas generales de préstamo"
+
+        if not plazo_dias or not limite_prestamos or not tarifa_mora_diaria:
+            messages.error(request, "Completa todos los campos.")
+        else:
+            try:
+                if regla is None:
+                    regla = ReglasPrestamo()
+
+                regla.plazo_dias = int(plazo_dias)
+                regla.limite_prestamos = int(limite_prestamos)
+                regla.tarifa_mora_diaria = tarifa_mora_diaria
+                regla.descripcion = descripcion
+                regla.fecha_actualizacion = timezone.now()
+                regla.save()
+
+                Bitacora.objects.create(
+                    usuario=usuario_actual,
+                    accion=(
+                        f"ACTUALIZÓ REGLAS DE PRÉSTAMO: "
+                        f"plazo={regla.plazo_dias} días, "
+                        f"límite={regla.limite_prestamos}, "
+                        f"mora={regla.tarifa_mora_diaria}"
+                    ),
+                    fecha=timezone.now()
+                )
+
+                messages.success(request, "Reglas de préstamo actualizadas correctamente.")
+                return redirect("configurar_reglas_prestamo")
+
+            except Exception as e:
+                messages.error(request, f"Error al guardar las reglas: {str(e)}")
+
+    contexto = {
+        "usuario_actual": usuario_actual,
+        "regla": regla,
+    }
+    return render(request, "seguridad/reglas.html", contexto)
+
+
 @requerir_rol("bibliotecario")
 
 def inventario(request):
@@ -297,7 +376,6 @@ def inventario(request):
 
             anio_publicacion = str(request.POST.get('anio_publicacion'))
 
-            libro.isbn = request.POST.get('isbn')
             libro.titulo = request.POST.get('titulo')
             libro.autor = request.POST.get('autor')
             libro.categoria = request.POST.get('categoria')
@@ -332,3 +410,364 @@ def inventario(request):
     }
 
     return render(request, "seguridad/inventario.html", contexto)
+
+
+@requerir_rol("bibliotecario")
+def gestion_prestamos(request):
+    """
+    Lista de préstamos activos para el bibliotecario, con buscador y paginación.
+    """
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(
+            id=request.session.get("id_usuario")
+        )
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    query = (request.GET.get("q") or "").strip()
+
+    prestamos_qs = (
+        Prestamos.objects.select_related("cliente__usuario", "ejemplar__libro")
+        .filter(estado="activo")
+        .order_by("-fecha_inicio")
+    )
+
+    if query:
+        prestamos_qs = prestamos_qs.filter(
+            Q(cliente__usuario__nombre__icontains=query) |
+            Q(cliente__usuario__apellido__icontains=query) |
+            Q(cliente__dni__icontains=query)
+        )
+
+    paginator = Paginator(prestamos_qs, 10)
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
+
+    contexto = {
+        "usuario_actual": usuario_actual,
+        "prestamos": page_obj,
+        "query": query,
+    }
+    return render(request, "seguridad/gestion_prestamos.html", contexto)
+
+UBICACIONES_PREDEFINIDAS = [
+    "Estante A1 - Sección Literatura",
+    "Estante B2 - Sección Ciencia",
+    "Estante C3 - Sección Historia",
+    "Estante D1 - Sección Infantil",
+    "Depósito General",
+]
+
+def _crear_ejemplar_para_libro(libro):
+    """
+    Crea un Ejemplar físico para un libro dado, generando:
+    - codigo_interno único (EJ-<id_libro>-####)
+    - ubicacion aleatoria
+    - estado aleatorio: nuevo / usado
+    """
+    base = f"EJ-{libro.id}-"
+    codigo = None
+
+    # Intentamos hasta 10 códigos diferentes para evitar colisión por unique
+    for _ in range(10):
+        sufijo = random.randint(1000, 9999)
+        candidato = f"{base}{sufijo}"
+        if not Ejemplares.objects.filter(codigo_interno=candidato).exists():
+            codigo = candidato
+            break
+
+    # Último recurso si por alguna razón no se encontró libre
+    if codigo is None:
+        codigo = f"{base}{timezone.now().strftime('%H%M%S')}"
+
+    ubicacion = random.choice(UBICACIONES_PREDEFINIDAS)
+    estado = random.choice(["nuevo", "usado"])
+
+    return Ejemplares.objects.create(
+        libro=libro,
+        codigo_interno=codigo,
+        ubicacion=ubicacion,
+        estado=estado,
+    )
+
+@requerir_rol("bibliotecario")
+@csrf_protect
+def registrar_prestamo(request):
+    """
+    Registrar un nuevo préstamo usando las reglas vigentes.
+    - Busca cliente por DNI
+    - Busca libro por ISBN
+    - Crea un Ejemplar físico aleatorio (codigo_interno, ubicacion, estado)
+    - Disminuye stock_total del libro
+    - Muestra pantalla de detalle del préstamo + ejemplar
+    """
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(
+            id=request.session.get("id_usuario")
+        )
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    regla = ReglasPrestamo.objects.order_by("-fecha_actualizacion").first()
+    hoy = timezone.localdate()
+
+    if regla is None:
+        messages.error(
+            request,
+            "No hay reglas de préstamo configuradas. Configúralas primero."
+        )
+        return redirect("configurar_reglas_prestamo")
+
+    form_data = {"dni": "", "isbn": ""}
+
+    if request.method == "POST":
+        dni = (request.POST.get("dni") or "").strip()
+        isbn = (request.POST.get("isbn") or "").strip()
+        fecha_inicio_str = request.POST.get("fecha_inicio") or hoy.isoformat()
+
+        form_data["dni"] = dni
+        form_data["isbn"] = isbn
+
+        # Validar campos obligatorios
+        if not dni or not isbn:
+            messages.error(request, "Completa todos los campos.")
+            return render(
+                request,
+                "seguridad/registrar_prestamo.html",
+                {
+                    "usuario_actual": usuario_actual,
+                    "regla": regla,
+                    "hoy": hoy,
+                    "form_data": form_data,
+                },
+            )
+
+        # Parsear fecha de inicio
+        try:
+            fecha_inicio = datetime.strptime(fecha_inicio_str, "%Y-%m-%d").date()
+        except ValueError:
+            messages.error(request, "La fecha de inicio no es válida.")
+            return render(
+                request,
+                "seguridad/registrar_prestamo.html",
+                {
+                    "usuario_actual": usuario_actual,
+                    "regla": regla,
+                    "hoy": hoy,
+                    "form_data": form_data,
+                },
+            )
+
+        if fecha_inicio < hoy:
+            messages.error(request, "La fecha de inicio no puede ser anterior a hoy.")
+            return render(
+                request,
+                "seguridad/registrar_prestamo.html",
+                {
+                    "usuario_actual": usuario_actual,
+                    "regla": regla,
+                    "hoy": hoy,
+                    "form_data": form_data,
+                },
+            )
+
+        # Buscar cliente por DNI
+        try:
+            cliente = Clientes.objects.select_related("usuario").get(
+                dni=dni, estado__iexact="activo"
+            )
+        except Clientes.DoesNotExist:
+            messages.error(request, "No se encontró un cliente activo con ese DNI.")
+            return render(
+                request,
+                "seguridad/registrar_prestamo.html",
+                {
+                    "usuario_actual": usuario_actual,
+                    "regla": regla,
+                    "hoy": hoy,
+                    "form_data": form_data,
+                },
+            )
+
+        # Validar límite de préstamos activos
+        prestamos_activos_cliente = Prestamos.objects.filter(
+            cliente=cliente,
+            estado="activo",
+        ).count()
+
+        if prestamos_activos_cliente >= regla.limite_prestamos:
+            messages.error(
+                request,
+                f"El cliente ya alcanzó el límite de {regla.limite_prestamos} préstamos activos."
+            )
+            return render(
+                request,
+                "seguridad/registrar_prestamo.html",
+                {
+                    "usuario_actual": usuario_actual,
+                    "regla": regla,
+                    "hoy": hoy,
+                    "form_data": form_data,
+                },
+            )
+
+        # Buscar libro por ISBN
+        try:
+            libro = Libros.objects.get(isbn=isbn)
+        except Libros.DoesNotExist:
+            messages.error(request, "No se encontró un libro con ese ISBN.")
+            return render(
+                request,
+                "seguridad/registrar_prestamo.html",
+                {
+                    "usuario_actual": usuario_actual,
+                    "regla": regla,
+                    "hoy": hoy,
+                    "form_data": form_data,
+                },
+            )
+
+        # Validar stock
+        if not libro.stock_total or libro.stock_total <= 0:
+            messages.error(request, "No hay stock disponible para este libro.")
+            return render(
+                request,
+                "seguridad/registrar_prestamo.html",
+                {
+                    "usuario_actual": usuario_actual,
+                    "regla": regla,
+                    "hoy": hoy,
+                    "form_data": form_data,
+                },
+            )
+
+        # Disminuir stock del libro
+        libro.stock_total = (libro.stock_total or 0) - 1
+        libro.save()
+
+        # Crear ejemplar físico aleatorio (codigo_interno, ubicacion, estado)
+        ejemplar = _crear_ejemplar_para_libro(libro)
+
+        # Calcular fecha fin según plazo de la regla
+        fecha_fin = fecha_inicio + timedelta(days=regla.plazo_dias)
+
+        # Crear préstamo
+        prestamo = Prestamos.objects.create(
+            cliente=cliente,
+            ejemplar=ejemplar,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+            estado="activo",
+        )
+
+        Bitacora.objects.create(
+            usuario=usuario_actual,
+            accion=(
+                f"REGISTRO PRÉSTAMO: cliente={cliente.dni}, "
+                f"ejemplar={ejemplar.codigo_interno}, id_prestamo={prestamo.id}"
+            ),
+            fecha=timezone.now(),
+        )
+
+        # En lugar de redirigir, mostramos pantalla con los datos del EJEMPLAR
+        messages.success(request, "Préstamo registrado correctamente.")
+        return render(
+            request,
+            "seguridad/detalle_prestamo.html",
+            {
+                "usuario_actual": usuario_actual,
+                "prestamo": prestamo,
+                "ejemplar": ejemplar,
+                "libro": libro,
+                "cliente": cliente,
+            },
+        )
+
+    # GET: mostrar formulario vacío
+    contexto = {
+        "usuario_actual": usuario_actual,
+        "regla": regla,
+        "hoy": hoy,
+        "form_data": form_data,
+    }
+    return render(request, "seguridad/registrar_prestamo.html", contexto)
+
+
+@requerir_rol("bibliotecario")
+@csrf_protect
+def devolver_prestamo(request, prestamo_id):
+    """
+    Marca un préstamo como devuelto.
+    """
+    if request.method != "POST":
+        return redirect("gestion_prestamos")
+
+    prestamo = get_object_or_404(
+        Prestamos,
+        id=prestamo_id,
+        estado="activo",
+    )
+
+    prestamo.fecha_devolucion = timezone.localdate()
+    prestamo.estado = "devuelto"
+    prestamo.save()
+
+    # Opcional: marcar ejemplar como disponible
+    # ejemplar = prestamo.ejemplar
+    # ejemplar.estado = "disponible"
+    # ejemplar.save()
+
+    Bitacora.objects.create(
+        usuario=Usuarios.objects.get(id=request.session.get("id_usuario")),
+        accion=f"DEVOLVIÓ PRÉSTAMO id={prestamo.id}",
+        fecha=timezone.now(),
+    )
+
+    messages.success(request, "El préstamo se marcó como devuelto.")
+    return redirect("gestion_prestamos")
+
+
+@requerir_rol("bibliotecario")
+@csrf_protect
+def renovar_prestamo(request, prestamo_id):
+    """
+    Renueva la fecha fin de un préstamo activo.
+    """
+    if request.method != "POST":
+        return redirect("gestion_prestamos")
+
+    prestamo = get_object_or_404(
+        Prestamos,
+        id=prestamo_id,
+        estado="activo",
+    )
+
+    nueva_fecha_str = request.POST.get("nueva_fecha_fin")
+    if not nueva_fecha_str:
+        messages.error(request, "Debes seleccionar una nueva fecha de devolución.")
+        return redirect("gestion_prestamos")
+
+    try:
+        nueva_fecha = datetime.strptime(nueva_fecha_str, "%Y-%m-%d").date()
+    except ValueError:
+        messages.error(request, "La nueva fecha de devolución no es válida.")
+        return redirect("gestion_prestamos")
+
+    if nueva_fecha <= prestamo.fecha_fin:
+        messages.error(
+            request,
+            "La nueva fecha de devolución debe ser mayor a la fecha actual de devolución."
+        )
+        return redirect("gestion_prestamos")
+
+    prestamo.fecha_fin = nueva_fecha
+    prestamo.save()
+
+    Bitacora.objects.create(
+        usuario=Usuarios.objects.get(id=request.session.get("id_usuario")),
+        accion=f"RENOVÓ PRÉSTAMO id={prestamo.id} nueva_fecha={nueva_fecha}",
+        fecha=timezone.now(),
+    )
+
+    messages.success(request, "El préstamo se renovó correctamente.")
+    return redirect("gestion_prestamos")
