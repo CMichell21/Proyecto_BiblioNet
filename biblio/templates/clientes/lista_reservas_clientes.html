@@ -4,18 +4,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pantalla Inicio Cliente</title>
+    <title>Mis Reservas - BiblioNet</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="{% static 'css/lista_reservas_cliente.css' %}">
-    
+    <link rel="stylesheet" href="{% static 'css/lista_reservas_cliente.css' %}"> 
 </head>
 
 <body>
-    <!-- Navbar -->
     <nav class="navbar navbar-expand-lg navbar-dark navbar-custom">
         <div class="container">
-            <a class="navbar-brand d-flex align-items-center" >
+            <a class="navbar-brand d-flex align-items-center" href="{% url 'pantalla_inicio_cliente' %}">
                 <img src="{% static 'imagenes/logo.jpg' %}" alt="Logo BiblioNet" class="me-2 brand-logo">
                 <span class="brand-text">BiblioNet</span>
             </a>
@@ -24,7 +22,7 @@
                 <div class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle d-flex align-items-center nav-link-custom" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                         <img src="{% static 'imagenes/foto_perfil.jpeg' %}" alt="Usuario" class="rounded-circle me-2 user-avatar">
-                        <span class="user-name">{{usuario.nombre}} {{usuario.apellido}}</span>
+                        <span class="user-name">{% if usuario %}{{usuario.nombre}} {{usuario.apellido}}{% else %}Cliente{% endif %}</span>
                     </a>
                     <ul class="dropdown-menu dropdown-menu-end">
                         <li><a class="dropdown-item" href="#"><i class="fas fa-user-edit me-2"></i>Mi Perfil</a></li>
@@ -33,7 +31,7 @@
                         <li><a class="dropdown-item text-danger" href="{% url 'cerrar_sesion_cliente' %}"><i class="fas fa-sign-out-alt me-2"></i>Cerrar Sesión</a></li>
                     </ul>
                 </div>
-            </div>                   
+            </div>           
         </div>
     </nav>
 
@@ -42,15 +40,14 @@
             <div class="row justify-content-center">
                 <div class="col-lg-8">    
                     <h1 class="catalog-title">
-                        <a href="{% url 'catalogo' %} ">
-                            <h2 class="text-white fs-3 font-size mt-3" >Disfruta reservando desde el catalogo</h2>
+                        <a href="{% url 'catalogo_cliente' %}"> 
+                            <h2 class="text-white fs-3 font-size mt-3">Disfruta reservando desde el catálogo</h2>
                         </a>
                         <a>
-                            <h2 class="text-white fs-3 font-size mt-3" >Solo tienes 48 horas para realizar tu reserva, antes de ser cancelada.</h2>
+                            <h2 class="text-white fs-3 font-size mt-3">Solo tienes 48 horas para recoger tu reserva, antes de ser cancelada.</h2>
                         </a>
                     </h1>
                 </div>
-                
             </div>
         </div>
     </header>
@@ -58,20 +55,27 @@
     <main class="main-content">
         <div class="container-fluid py-4">
         
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
 
-            <!-- Botones de Historial -->
             <div class="row history-buttons">
                 <div class="col-md-6 mb-3">
                     <a href="{% url 'pantalla_inicio_cliente' %}" class="btn btn-custom-1 w-100 btn-history">
                         <i class="fas fa-home me-2"></i>
-                        pantalla de inicio
+                        Pantalla de Inicio
                     </a>
                 </div>
                 
                 <div class="col-md-6 mb-3">
-                    <button class="btn btn-custom-1 w-100 btn-history">
+                    <button class="btn btn-custom-1 w-100 btn-history" disabled>
                         <i class="fas fa-shopping-cart me-2"></i>
-                        Historial de Compras
+                        Historial de Compras (En desarrollo)
                     </button>
                 </div>
                 <div class="col-md-6 mb-3">
@@ -81,24 +85,23 @@
                     </button>
                 </div>
                 <div class="col-md-6 mb-3 mx-auto">
-                    <button class="btn btn-custom-2 w-100 btn-history">
+                    <button class="btn btn-custom-2 w-100 btn-history" disabled>
                         <i class="fas fa-history me-2"></i>
-                        Historial de Préstamos
+                        Historial de Préstamos (En desarrollo)
                     </button>
                 </div>
             </div>
             
-            <!-- Préstamos Activos -->
             <div class="card shadow-sm mb-4">
                 <div class="card-header bg-white py-3">
                     <div class="d-flex justify-content-between align-items-center">
                         <h5 class="card-title mb-0">
                             <i class="fas fa-bookmark me-2"></i>
-                            Reservas
-                            <span class="badge bg-primary ms-2">3</span>
+                            Mis Reservas
+                            <span class="badge bg-primary ms-2">{{ reservas|length }}</span>
                         </h5>
                         <div class="btn-group">
-                            <button class="btn btn-outline-secondary btn-sm">
+                            <button class="btn btn-outline-secondary btn-sm" disabled>
                                 <i class="fas fa-filter me-2"></i>
                                 Filtrar
                             </button>
@@ -107,96 +110,132 @@
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
+                        
+                        {% if reservas %}
                         <table class="table table-hover mb-0">
                             <thead class="table-light">
                                 <tr>
                                     <th>Portada</th>
-                                    <th>Titulo</th>
+                                    <th>Título</th>
                                     <th>Autor</th>
-                                    <th>Categoria</th>
-                                    <th>Tiempo habil para solicitar prestamo</th>
+                                    <th>Fecha Reserva</th>
+                                    <th>Fecha Límite</th>
                                     <th>Estado</th>
                                     <th>Acciones</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr>
+                                {% for reserva in reservas %}
+                                <tr id="reserva-{{ reserva.id }}">
                                     <td>
-                                        <div class="d-flex align-items-center">
-                                            <div class="book-cover me-3 rounded bg-light d-flex align-items-center justify-content-center">
-                                                <i class="fas fa-book text-muted"></i>
-                                            </div>
-                                            <div>
-                                                <strong></strong>
-                                                <div class="text-muted small"></div>
-                                            </div>
+                                        <div class="book-cover me-3 rounded bg-light d-flex align-items-center justify-content-center">
+                                            <i class="fas fa-book text-muted"></i>
                                         </div>
                                     </td>
                                     <td>
-                                        <div class="fw-bold"></div>
-                                        <div class="text-muted small"></div>
+                                        <div class="fw-bold">{{ reserva.libro.titulo }}</div>
                                     </td>
                                     <td>
-                                        <div class="fw-bold"></div>
-                                        <div class="text-muted small"></div>
+                                        <div class="text-muted small">{{ reserva.libro.autor }}</div>
                                     </td>
                                     <td>
-                                        <div class="fw-bold"></div>
-                                        <div class="text-muted small"></div>
+                                        <div class="fw-bold">{{ reserva.fecha_reserva|date:"d/m/Y H:i" }}</div>
+                                    </td>
+                                    <td class="{% if reserva.fecha_vencimiento < now and reserva.estado == 'activa' %}text-danger fw-bold{% endif %}">
+                                        {{ reserva.fecha_vencimiento|date:"d/m/Y H:i" }}
                                     </td>
                                     <td>
-                                        <span class="badge bg-success"></span>
+                                        {% if reserva.estado == 'activa' %}
+                                            <span class="badge bg-success">Activa</span>
+                                        {% elif reserva.estado == 'vencida' %}
+                                            <span class="badge bg-warning text-dark">Vencida</span>
+                                        {% elif reserva.estado == 'cancelada' %}
+                                            <span class="badge bg-secondary">Cancelada</span>
+                                        {% else %}
+                                            <span class="badge bg-info">{{ reserva.estado|capfirst }}</span>
+                                        {% endif %}
                                     </td>
                                     <td>
-                                        <span class="badge bg-success">
-                                            <i class="fas fa-check me-1"></i>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <div class="btn-group btn-group-sm">
-                                            <button class="btn btn-outline-danger" title="Eliminar" data-bs-toggle="modal" data-bs-target="#eliminarReservaModal">
-                                                <i class="fas fa-trash"></i>
+                                        {% if reserva.estado == 'activa' %}
+                                            <button 
+                                                class="btn btn-outline-danger btn-sm" 
+                                                title="Cancelar Reserva" 
+                                                data-bs-toggle="modal" 
+                                                data-bs-target="#cancelarReservaModal"
+                                                data-reserva-id="{{ reserva.id }}"
+                                                data-libro-titulo="{{ reserva.libro.titulo }}"
+                                            >
+                                                <i class="fas fa-trash"></i> Cancelar
                                             </button>
-                                        </div>
+                                        {% else %}
+                                            <button class="btn btn-outline-secondary btn-sm" disabled>
+                                                No Cancelable
+                                            </button>
+                                        {% endif %}
                                     </td>
                                 </tr>
-                                    
+                                {% endfor %}
                             </tbody>
                         </table>
+                        {% else %}
+                            <div class="alert alert-info text-center m-4" role="alert">
+                                📚 ¡No tienes reservas activas! <a href="{% url 'catalogo_cliente' %}" class="alert-link">Reserva un libro ahora</a>.
+                            </div>
+                        {% endif %}
                     </div>
                 </div>
             </div>
         </div>
     </main>
 
-    <!-- Modal para eliminar libro -->
-    <div class="modal fade" id="eliminarReservaModal" tabindex="-1" aria-labelledby="eliminarReservaModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
+    <div class="modal fade" id="cancelarReservaModal" tabindex="-1" aria-labelledby="cancelarReservaModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
             <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="eliminarReservaModalLabel">Eliminar Reserva</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <form id="formEliminarReserva">
-                        <div class="row">
-                            
-                            <div class="col-md-6 mb-3">
-                                <label for="edit_autor" class="form-label">Estas seguro que deseas eliminar esta reserva</label>
-                            </div>
-                           
-                        </div>
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-                    <button type="submit" form="formEliminarReserva" class="btn btn-primary">Eliminar</button>
-                </div>
+                <form id="formCancelarReserva" method="POST">
+                    {% csrf_token %}
+                    <div class="modal-header bg-danger text-white">
+                        <h5 class="modal-title" id="cancelarReservaModalLabel"><i class="fas fa-exclamation-triangle me-2"></i> Confirmar Cancelación</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="mb-3">¿Estás seguro de que deseas **cancelar** la reserva del libro:</p>
+                        <h4 class="text-primary" id="libroTituloModal"></h4>
+                        <p class="text-danger small">Esta acción no se puede deshacer y el ejemplar volverá al stock disponible.</p>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Mantener Reserva</button>
+                        <button type="submit" class="btn btn-danger">Sí, Cancelar Reserva</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
 
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Script para pasar el ID de la reserva al modal
+        document.addEventListener('DOMContentLoaded', function () {
+            var cancelarReservaModal = document.getElementById('cancelarReservaModal');
+            cancelarReservaModal.addEventListener('show.bs.modal', function (event) {
+                // Botón que disparó el modal
+                var button = event.relatedTarget;
+                var reservaId = button.getAttribute('data-reserva-id');
+                var libroTitulo = button.getAttribute('data-libro-titulo');
+                
+                var form = document.getElementById('formCancelarReserva');
+                var tituloElement = document.getElementById('libroTituloModal');
+                
+                // Configurar la acción del formulario con el ID de la reserva
+                // Usamos la URL de Django para la acción de cancelar:
+                // {% url 'cancelar_reserva' 0 %} actúa como placeholder
+                var urlBase = "{% url 'cancelar_reserva' 0 %}";
+                form.action = urlBase.replace('/0/', '/' + reservaId + '/');
+                
+                // Mostrar el título del libro en el modal
+                tituloElement.textContent = libroTitulo;
+            });
+        });
+    </script>
 </body>
 </html>

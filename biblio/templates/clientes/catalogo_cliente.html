@@ -1,0 +1,387 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Catálogo - BiblioNet</title>
+    <!-- Carga de Bootstrap y Font Awesome -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Carga de estilos personalizados (se asume que existe) -->
+    <link rel="stylesheet" href="{% static 'css/estilos_generales_catalogo.css' %}">
+
+    <style>
+        /* Estilos para el Modal de Reserva/Login */
+        .modal-reserva { border-radius: 15px; overflow: hidden; }
+        .modal-reserva .modal-header {
+            background: linear-gradient(135deg, #1f2833 0%, #007bff 100%);
+            color: white; border-bottom: none;
+        }
+        .modal-reserva .modal-body { padding: 2rem; text-align: center; }
+        .info-reserva { background: #f8f9fa; border-radius: 10px; padding: 1.5rem; margin: 1rem 0; }
+        .reserva-icon { font-size: 3rem; margin-bottom: 1rem; }
+        .btn-reserva {
+            background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
+            border: none; color: white; padding: 0.75rem 2rem;
+            border-radius: 0.5rem; font-weight: 600; transition: all 0.3s ease;
+        }
+        .btn-reserva:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4);
+            color: white;
+        }
+        .btn-reserva:disabled { background: #6c757d; transform: none; box-shadow: none; }
+
+        /* Estilos de portada del catálogo */
+        .catalog-cover {
+            width: 100%; height: 350px; object-fit: cover;
+            border-top-left-radius: 0.75rem; border-top-right-radius: 0.75rem;
+        }
+
+        /* Estilos del avatar de usuario en la barra de navegación */
+        .user-avatar {
+            width: 40px; height: 40px; object-fit: cover; border-radius: 50%;
+        }
+
+        /* Estilos generales de la barra de navegación (asumiendo que .navbar-custom está en estilos_generales_catalogo.css) */
+    </style>
+</head>
+
+<body>
+    <!-- BARRA DE NAVEGACIÓN -->
+    <nav class="navbar navbar-expand-lg navbar-dark navbar-custom">
+        <div class="container">
+
+            <!-- Logo y Marca -->
+            <a class="navbar-brand d-flex align-items-center" href="{% url 'pantalla_inicio_cliente' %}">
+                <img src="{% static 'imagenes/logo.jpg' %}" alt="Logo BiblioNet" width="60" class="me-2 brand-logo">
+                <span class="brand-text">BiblioNet</span>
+            </a>
+
+            <!-- Botón del menú responsivo -->
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+                    data-bs-target="#navbarPrincipal" aria-controls="navbarPrincipal"
+                    aria-expanded="false" aria-label="Menú de navegación">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+
+            <!-- Contenido del menú -->
+            <div class="collapse navbar-collapse justify-content-end" id="navbarPrincipal">
+                <ul class="navbar-nav me-4">
+                    <li class="nav-item">
+                        <a class="nav-link nav-link-custom" href="{% url 'pantalla_inicio_cliente' %}">Inicio</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link nav-link-custom active" href="{% url 'catalogo_cliente' %}">Catálogo</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link nav-link-custom" href="{% url 'lista_reservas_clientes' %}">Mis Reservas</a>
+                    </li>
+                </ul>
+
+                <!-- Dropdown del Perfil de Usuario (si está autenticado) -->
+                <div class="d-flex align-items-center">
+
+                    {% if user.is_authenticated %}
+                        <div class="dropdown">
+                            <a class="nav-link dropdown-toggle d-flex align-items-center nav-link-custom"
+                               href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+
+                                <!-- Asume que la imagen de perfil está en static/imagenes/foto_perfil.jpeg -->
+                                <img src="/static/imagenes/foto_perfil.jpeg"
+                                     alt="Usuario" class="rounded-circle me-2 user-avatar">
+
+                                <!-- Muestra el nombre o el username -->
+                                <span class="user-name">{{ user.first_name|default:user.username }}</span>
+                            </a>
+
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><a class="dropdown-item" href="{% url 'lista_reservas_clientes' %}">
+                                    <i class="fas fa-bookmark me-2"></i>Mis Reservas
+                                </a></li>
+
+                                <li><a class="dropdown-item" href="#">
+                                    <i class="fas fa-user me-2"></i>Mi Perfil
+                                </a></li>
+
+                                <li><hr class="dropdown-divider"></li>
+
+                                <li><a class="dropdown-item text-danger" href="{% url 'cerrar_sesion_cliente' %}">
+                                    <i class="fas fa-sign-out-alt me-2"></i>Cerrar Sesión
+                                </a></li>
+                            </ul>
+                        </div>
+
+                    {% else %}
+                        <!-- Botones de login/registro (si NO está autenticado) -->
+                        <a href="{% url 'inicio_sesion_cliente' %}" class="btn btn-outline-light btn-nav me-2">Iniciar sesión</a>
+                        <a href="{% url 'registro_cliente' %}" class="btn btn-accent">Registrarse</a>
+                    {% endif %}
+
+                </div>
+            </div>
+        </div>
+    </nav>
+
+
+    <div class="container mt-3"></div>
+
+    <!-- ENCABEZADO Y ESTADÍSTICAS DEL CATÁLOGO -->
+    <header class="catalog-header">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-lg-8">
+                    <h1 class="catalog-title">Catálogo de Libros</h1>
+                    <p class="catalog-subtitle">Explora nuestra completa colección de libros disponibles para reserva</p>
+                </div>
+
+                <div class="col-lg-4 text-lg-end">
+                    <div class="catalog-stats">
+                        <span class="stat-item">📚 {{ libros|length }} Libros Disponibles</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+
+    <!-- ================= FILTROS Y BÚSQUEDA ================= -->
+    <section class="filters-section-improved">
+        <div class="container">
+
+            <div class="filters-header">
+                <h3 class="filters-title">Busca el libro que más te guste</h3>
+            </div>
+
+            <form method="get" class="row g-4 filters-content">
+                <!-- Filtro de Categorías -->
+                <div class="col-md-3">
+                    <label class="filter-label">Categorías</label>
+                    <select class="form-select filter-select" name="categoria">
+                        <option value="" {% if not request.GET.categoria %}selected{% endif %}>Todas las categorías</option>
+                        <option value="ficcion" {% if request.GET.categoria == 'ficcion' %}selected{% endif %}>Ficción</option>
+                        <option value="ciencia" {% if request.GET.categoria == 'ciencia' %}selected{% endif %}>Ciencia</option>
+                        <option value="historia" {% if request.GET.categoria == 'historia' %}selected{% endif %}>Historia</option>
+                        <option value="biografia" {% if request.GET.categoria == 'biografia' %}selected{% endif %}>Biografía</option>
+                        <option value="misterio" {% if request.GET.categoria == 'misterio' %}selected{% endif %}>Misterio</option>
+                    </select>
+                </div>
+
+                <!-- Filtro de Estado (solo disponible) -->
+                <div class="col-md-3">
+                    <label class="filter-label">Estado</label>
+                    <select class="form-select filter-select" name="estado" disabled>
+                        <option value="disponible" selected>Disponible</option>
+                    </select>
+                </div>
+
+                <!-- Filtro de Ordenamiento -->
+                <div class="col-md-3">
+                    <label class="filter-label">Ordenar por</label>
+                    <select class="form-select filter-select" name="orden">
+                        <option value="titulo" {% if request.GET.orden == 'titulo' or not request.GET.orden %}selected{% endif %}>Título A-Z</option>
+                        <option value="autor" {% if request.GET.orden == 'autor' %}selected{% endif %}>Autor A-Z</option>
+                        <option value="fecha" {% if request.GET.orden == 'fecha' %}selected{% endif %}>Más recientes</option>
+                    </select>
+                </div>
+
+                <!-- Campo de Búsqueda de Texto -->
+                <div class="col-md-3">
+                    <label class="filter-label">Buscar</label>
+                    <div class="input-group search-group-improved">
+                        <input type="text" class="form-control search-input-improved"
+                               name="q" placeholder="Título, autor..." value="{{ request.GET.q|default:'' }}">
+
+                        <button class="btn btn-search-improved" type="submit">
+                            <span class="search-icon">🔍</span>
+                        </button>
+                    </div>
+                </div>
+
+            </form>
+
+        </div>
+    </section>
+
+
+    <!-- ================= LISTADO DE LIBROS ================= -->
+    <section class="py-5 bg-light">
+        <div class="container">
+            <div class="row g-4">
+
+                {% for libro in libros %}
+                <div class="col-md-6 col-lg-4">
+                    <div class="card h-100 shadow-sm">
+
+                        <!-- Imagen del Libro -->
+                        <img src="{{ libro.imagen.url|default:'https://via.placeholder.com/200x300?text=Sin+Imagen' }}"
+                             class="card-img-top catalog-cover" alt="{{ libro.titulo }}">
+
+                        <div class="card-body d-flex flex-column">
+                            <!-- Información del Libro -->
+                            <h5 class="card-title">{{ libro.titulo }}</h5>
+                            <p class="card-text text-muted">{{ libro.autor }}</p>
+                            <p class="card-text small">
+                                {{ libro.editorial }}, {{ libro.anio_publicacion }}
+                            </p>
+
+                            <div class="mt-auto">
+
+                                <!-- Estado del Stock -->
+                                {% if libro.stock_disponible > 0 %}
+                                    <span class="badge bg-success mb-2">Disponible: {{ libro.stock_disponible }}</span>
+                                {% else %}
+                                    <span class="badge bg-danger mb-2">Agotado</span>
+                                {% endif %}
+
+                                <div class="d-grid gap-2">
+                                    <a href="#" class="btn btn-primary">Ver detalles</a>
+
+                                    <!-- Botones de Reserva Condicionales -->
+                                    {% if user.is_authenticated %}
+                                        {% if libro.stock_disponible > 0 %}
+                                            <a href="{% url 'confirmar_reserva' libro_id=libro.id %}"
+                                               class="btn btn-success w-100">
+                                               <i class="fas fa-bookmark me-2"></i>Reservar
+                                            </a>
+                                        {% else %}
+                                            <button class="btn btn-secondary w-100" disabled>
+                                                <i class="fas fa-bookmark me-2"></i>Reservar (Agotado)
+                                            </button>
+                                        {% endif %}
+                                    {% else %}
+                                        <!-- Botón para mostrar modal de login si no está autenticado -->
+                                        <button class="btn btn-outline-primary w-100"
+                                                data-bs-toggle="modal" data-bs-target="#modalReservaLogin">
+                                            <i class="fas fa-bookmark me-2"></i>Reservar
+                                        </button>
+                                    {% endif %}
+
+                                </div>
+
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {% empty %}
+                <!-- Mensaje si no hay libros -->
+                <div class="col-12">
+                    <div class="alert alert-warning text-center">
+                        No se encontraron libros que coincidan con los criterios de búsqueda.
+                    </div>
+                </div>
+                {% endfor %}
+
+            </div>
+        </div>
+    </section>
+
+
+    <!-- ================= FOOTER ================= -->
+    <footer class="footer-custom">
+        <div class="container">
+
+            <div class="row">
+                <!-- Info de la Marca -->
+                <div class="col-lg-4 mb-4">
+                    <div class="footer-brand">
+                        <img src="{% static 'imagenes/logo.jpg' %}" alt="BiblioNet" width="50" class="me-2">
+                        <span class="footer-brand-text">BiblioNet</span>
+                    </div>
+                    <p class="footer-description">
+                        Tu biblioteca digital de confianza con miles de títulos disponibles.
+                        Llevamos la magia de la lectura a tu pantalla.
+                    </p>
+                </div>
+
+                <!-- Enlaces de Navegación -->
+                <div class="col-lg-2 col-md-4 mb-4">
+                    <h5 class="footer-title">Enlaces</h5>
+                    <ul class="footer-links">
+                        <li><a href="{% url 'pantalla_inicio_cliente' %}">Inicio</a></li>
+                        <li><a href="{% url 'catalogo_cliente' %}">Catálogo</a></li>
+                        <li><a href="{% url 'lista_reservas_clientes' %}">Mis Reservas</a></li>
+                    </ul>
+                </div>
+
+                <!-- Enlaces de Categorías -->
+                <div class="col-lg-3 col-md-4 mb-4">
+                    <h5 class="footer-title">Categorías</h5>
+                    <ul class="footer-links">
+                        <li><a href="{% url 'catalogo_cliente' %}?categoria=ficcion">Ficción</a></li>
+                        <li><a href="{% url 'catalogo_cliente' %}?categoria=ciencia">Ciencia</a></li>
+                        <li><a href="{% url 'catalogo_cliente' %}?categoria=historia">Historia</a></li>
+                        <li><a href="{% url 'catalogo_cliente' %}?categoria=biografia">Biografía</a></li>
+                    </ul>
+                </div>
+
+                <!-- Contacto -->
+                <div class="col-lg-3 col-md-4 mb-4">
+                    <h5 class="footer-title">Contacto</h5>
+                    <p>📧 info@biblionet.com</p>
+                    <p>📞 +1 234 567 890</p>
+                    <p>📍 Calle Libros 123, Ciudad</p>
+                </div>
+
+            </div>
+
+            <!-- Copyright y Legales -->
+            <div class="footer-bottom">
+                <div class="row align-items-center">
+
+                    <div class="col-md-6">
+                        <p class="copyright">
+                            © 2025 BiblioNet. Todos los derechos reservados.
+                        </p>
+                    </div>
+
+                    <div class="col-md-6 text-md-end">
+                        <a href="#">Política de privacidad</a>
+                        <a href="#">Términos de servicio</a>
+                    </div>
+
+                </div>
+            </div>
+
+        </div>
+    </footer>
+
+
+    <!-- ================= MODAL INICIAR SESIÓN (para usuarios no logueados) ================= -->
+    <div class="modal fade" id="modalReservaLogin" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content modal-reserva">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-sign-in-alt me-2"></i>Iniciar Sesión Requerido</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                </div>
+
+                <div class="modal-body">
+                    <div class="reserva-icon">🔐</div>
+                    <h4 class="mb-3">Debes iniciar sesión para reservar</h4>
+
+                    <div class="info-reserva">
+                        <p>Para poder reservar libros, necesitas tener una cuenta en BiblioNet.</p>
+                    </div>
+
+                    <p class="text-muted">Si ya tienes una cuenta, inicia sesión. Si no, regístrate gratis.</p>
+                </div>
+
+                <div class="modal-footer justify-content-center">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <a href="{% url 'inicio_sesion_cliente' %}" class="btn btn-reserva">Iniciar Sesión</a>
+                    <a href="{% url 'registro_cliente' %}" class="btn btn-outline-primary">Registrarse</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Scripts de Bootstrap y Font Awesome -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+
+</body>
+</html>

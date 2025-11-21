@@ -84,7 +84,7 @@ DATABASES = {
         "ENGINE": "django.db.backends.mysql",
         "NAME": "biblionet",
         "USER": "root",
-        "PASSWORD": "mysql",
+        "PASSWORD": "admi",
         "HOST": "127.0.0.1",
         "PORT": "3306",
         "OPTIONS": {
@@ -141,3 +141,8 @@ MEDIA_ROOT = BASE_DIR / "media"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# REDIRECCIONAMIENTO DE AUTENTICACIÓN
+# Indica a Django que use esta ruta cuando @login_required falle.
+LOGIN_URL = '/clientes/inicio_sesion/'

@@ -1,0 +1,26 @@
+<h2>Confirmación de Reserva</h2>
+
+<p>Estás a punto de reservar el siguiente libro:</p>
+
+<div class="reserva-detalle">
+    <h3>{{ libro.titulo }}</h3>
+    <p>Autor: {{ libro.autor }}</p>
+    <p>Stock Disponible: {{ libro.stock_total }}</p>
+    <p>
+        Al confirmar, tendrás un plazo de 
+        <strong>{{ plazo_reserva_dias }} días</strong> 
+        para recoger el libro antes de que la reserva expire.
+    </p>
+</div>
+
+<form method="post" action="{% url 'crear_reserva' libro_id=libro.id %}">
+    {% csrf_token %}
+    
+    <button type="submit" class="btn btn-success btn-lg">
+        ✅ SÍ, CONFIRMAR RESERVA
+    </button>
+    
+    <a href="{% url 'catalogo_cliente' %}" class="btn btn-secondary">
+        Cancelar y Volver al Catálogo
+    </a>
+</form>
