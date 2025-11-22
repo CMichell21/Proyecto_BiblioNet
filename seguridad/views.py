@@ -132,24 +132,82 @@ def panel_administrador(request):
         return redirect("cerrar_sesion")
 
     total_libros = Libros.objects.count()
-    
+
+    # Cantidad de empleados activos (badge azul)
     empleados_activos = Usuarios.objects.filter(
-        rol__nombre__in=["administrador", "bibliotecario"], 
-        estado__iexact="activo"
+        rol__nombre__in=["administrador", "bibliotecario"],
+        estado__iexact="activo",
     ).count()
-    
-    empleados = Usuarios.objects.select_related("rol").filter(
+
+    # Parámetros de búsqueda y filtro
+    query = (request.GET.get("q") or "").strip()
+    estado_filtro = (request.GET.get("estado") or "").lower()
+
+    # Query base: solo admins y bibliotecarios
+    empleados_qs = Usuarios.objects.select_related("rol").filter(
         rol__nombre__in=["administrador", "bibliotecario"]
-    ).order_by("-fecha_creacion")
+    )
+
+    # Buscar por nombre
+    if query:
+        empleados_qs = empleados_qs.filter(nombre__icontains=query)
+
+    # Filtrar por estado (activo / inactivo)
+    if estado_filtro in ["activo", "inactivo"]:
+        empleados_qs = empleados_qs.filter(estado__iexact=estado_filtro)
+
+    empleados_qs = empleados_qs.order_by("-fecha_creacion")
+
+    # Paginación: 5 empleados por página
+    paginator = Paginator(empleados_qs, 5)
+    page_number = request.GET.get("page")
+    empleados_page = paginator.get_page(page_number)
 
     contexto = {
         "usuario_actual": usuario_actual,
         "total_libros": total_libros,
         "ventas_mensuales": None,
         "empleados_activos": empleados_activos,
-        "empleados": empleados,
+        "empleados": empleados_page,
+        "query": query,
+        "estado_filtro": estado_filtro,
     }
     return render(request, "seguridad/admin_home.html", contexto)
+
+
+def editar_empleado(request, empleado_id):
+    empleado = get_object_or_404(
+        Usuarios,
+        id=empleado_id,
+        rol__nombre__in=["administrador", "bibliotecario"],
+    )
+
+    if request.method == "POST":
+        nombre = (request.POST.get("nombre") or "").strip()
+        apellido = (request.POST.get("apellido") or "").strip()
+        email = (request.POST.get("email") or "").strip()
+        estado = (request.POST.get("estado") or "").strip().lower()
+
+        if not (nombre and apellido and email):
+            messages.error(request, "Todos los campos son obligatorios.")
+            return redirect("panel_administrador")
+
+        empleado.nombre = nombre
+        empleado.apellido = apellido
+        empleado.email = email
+
+        if estado in ["activo", "inactivo"]:
+            empleado.estado = estado
+
+        empleado.save()
+
+        messages.success(
+            request,
+            f"Empleado {empleado.nombre} {empleado.apellido} actualizado correctamente.",
+        )
+
+    return redirect("panel_administrador")
+
 
 @requerir_rol("bibliotecario")
 def panel_bibliotecario(request):
