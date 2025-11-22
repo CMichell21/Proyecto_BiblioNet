@@ -14,7 +14,7 @@
     <!-- Navbar -->
     <nav class="navbar navbar-expand-lg navbar-dark navbar-custom">
         <div class="container">
-            <a class="navbar-brand d-flex align-items-center" >
+            <a class="navbar-brand d-flex align-items-center">
                 <img src="{% static 'imagenes/logo.jpg' %}" alt="Logo BiblioNet" class="me-2 brand-logo">
                 <span class="brand-text">BiblioNet</span>
             </a>
@@ -23,13 +23,13 @@
                 <div class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle d-flex align-items-center nav-link-custom" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                         <img src="{% static 'imagenes/foto_perfil.jpeg' %}" alt="Usuario" class="rounded-circle me-2 user-avatar">
-                        <span class="user-name">{{usuario_actual.nombre}} {{usuario_actual.apellido}}</span>
+                        <span class="user-name">{{ usuario_actual.nombre }} {{ usuario_actual.apellido }}</span>
                     </a>
                     <ul class="dropdown-menu dropdown-menu-end">
                         <li><a class="dropdown-item" href="#"><i class="fas fa-user-edit me-2"></i>Mi Perfil</a></li>
                         <li><a class="dropdown-item" href="#"><i class="fas fa-cog me-2"></i>Configuración</a></li>
                         <li><hr class="dropdown-divider"></li>
-                        <li><a class="dropdown-item text-danger" href="{% url 'cerrar_sesion_cliente' %}"><i class="fas fa-sign-out-alt me-2"></i>Cerrar Sesión</a></li>
+                        <li><a class="dropdown-item text-danger" href="{% url 'cerrar_sesion' %}"><i class="fas fa-sign-out-alt me-2"></i>Cerrar Sesión</a></li>
                     </ul>
                 </div>
             </div>                   
@@ -42,8 +42,11 @@
                 <div class="col-lg-8">    
                     <h1 class="catalog-title">
                         <i class="fas fa-user-tie me-2"></i>
-                        Bienvenido {{usuario_actual.nombre}}
+                        Bienvenido {{ usuario_actual.nombre }}
                     </h1>
+                    <p class="text-white-50 mb-0">
+                        Panel de control del bibliotecario
+                    </p>
                 </div>
             </div>
         </div>
@@ -51,8 +54,15 @@
 
     <main class="main-content">
         <div class="container-fluid py-4">
+
             <!-- Acciones Rápidas -->
             <div class="row action-buttons">
+                <div class="col-md-3 mb-3">
+                    <a href="{% url 'panel_bibliotecario' %}" class="btn btn-inventario w-100 btn-action active">
+                        <i class="fas fa-home me-2"></i>
+                        Inicio
+                    </a>
+                </div>
                 <div class="col-md-3 mb-3">
                     <a href="{% url 'inventario' %}" class="btn btn-inventario w-100 btn-action">
                         <i class="fas fa-boxes me-2"></i>
@@ -72,13 +82,24 @@
                     </a>
                 </div>
                 <div class="col-md-3 mb-3">
-                    <a href="#" class="btn btn-prestamo w-100 btn-action">
+                    <a href="{% url 'gestion_prestamos' %}" class="btn btn-prestamo w-100 btn-action">
                         <i class="fas fa-book me-2"></i>
-                        Gestión de prestamos
+                        Gestión de préstamos
                     </a>
                 </div>
             </div>
-            
+
+            <!-- Mensajes -->
+            {% if messages %}
+                <div class="mb-3">
+                    {% for message in messages %}
+                        <div class="alert alert-{{ message.tags }} mb-1">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+
             <!-- Préstamos en Retraso -->
             <div class="card shadow-sm">
                 <div class="card-header bg-white py-3">
@@ -87,11 +108,8 @@
                             <i class="fas fa-exclamation-triangle me-2"></i>
                             Préstamos en Retraso
                         </h5>
-                        <div class="btn-group">
-                            <button class="btn btn-outline-danger btn-sm">
-                                <i class="fas fa-filter me-2"></i>
-                                Filtrar
-                            </button>
+                        <div class="text-muted small">
+                            Total en retraso: {{ prestamos_vencidos }}
                         </div>
                     </div>
                 </div>
@@ -109,87 +127,210 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <!-- Préstamo en Retraso -->
-                                <tr class="prestamo-retraso">
-                                    <td>
-                                        <div class="d-flex align-items-center">
-                                            <div class="book-cover me-3">
-                                                <i class="fas fa-book text-muted"></i>
+                                {% for prestamo in prestamos_retraso %}
+                                    <tr class="prestamo-retraso">
+                                        <td>
+                                            <div class="d-flex align-items-center">
+                                                <div class="book-cover me-3">
+                                                    <i class="fas fa-book text-muted"></i>
+                                                </div>
+                                                <div>
+                                                    <strong>{{ prestamo.ejemplar.libro.titulo }}</strong>
+                                                    <div class="text-muted small">
+                                                        Código: {{ prestamo.ejemplar.codigo_interno }}
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <div>
-                                                <strong>1984</strong>
-                                                <div class="text-muted small">George Orwell</div>
+                                        </td>
+                                        <td>
+                                            <div class="d-flex align-items-center">
+                                                <div class="user-avatar-small me-2">
+                                                    <i class="fas fa-user text-muted"></i>
+                                                </div>
+                                                <div>
+                                                    <strong>
+                                                        {{ prestamo.cliente.usuario.nombre }}
+                                                        {{ prestamo.cliente.usuario.apellido }}
+                                                    </strong>
+                                                    <div class="text-muted small">
+                                                        ID: {{ prestamo.cliente.id }}
+                                                    </div>
+                                                </div>
                                             </div>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div class="d-flex align-items-center">
-                                            <div class="user-avatar-small me-2">
-                                                <i class="fas fa-user text-muted"></i>
+                                        </td>
+                                        <td>
+                                            <div class="fw-bold">
+                                                {{ prestamo.fecha_inicio|date:"d/m/Y" }}
                                             </div>
-                                            <div>
-                                                <strong>Ana López</strong>
-                                                <div class="text-muted small">ID: 45678</div>
+                                        </td>
+                                        <td>
+                                            <div class="fw-bold">
+                                                {{ prestamo.fecha_fin|date:"d/m/Y" }}
                                             </div>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div class="fw-bold">01/03/2023</div>
-                                        <div class="text-muted small">Hace 19 días</div>
-                                    </td>
-                                    <td>
-                                        <div class="fw-bold">15/03/2023</div>
-                                        <div class="text-muted small">Hace 5 días</div>
-                                    </td>
-                                    <td>
-                                        <span class="badge badge-retraso badge-dias">
-                                            <i class="fas fa-exclamation me-1"></i>
-                                            5 días
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <div class="btn-group btn-group-sm">
-                                            <button class="btn btn-outline-primary" title="Detalles">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
-                                            <button class="btn btn-outline-success" title="Renovar">
-                                                <i class="fas fa-redo"></i>
-                                            </button>
-                                            <button class="btn btn-outline-danger" title="Marcar Devuelto">
-                                                <i class="fas fa-undo"></i>
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
+                                        </td>
+                                        <td>
+                                            <span class="badge badge-retraso badge-dias">
+                                                <i class="fas fa-exclamation me-1"></i>
+                                                {{ prestamo.dias_retraso }} días
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                
+
+                                                <!-- Renovar (abre modal) -->
+                                                <button
+                                                    type="button"
+                                                    class="btn btn-outline-success"
+                                                    data-bs-toggle="modal"
+                                                    data-bs-target="#modalRenovarRetraso{{ prestamo.id }}"
+                                                    title="Renovar fecha de devolución"
+                                                >
+                                                    <i class="fas fa-redo me-1"></i> Renovar
+                                                </button>
+
+                                                <!-- Marcar devuelto -->
+                                                <form method="post" action="#" style="display:inline;">
+                                                    {% csrf_token %}
+                                                    <button
+                                                        type="submit"
+                                                        class="btn btn-outline-danger"
+                                                        title="Marcar devuelto"
+                                                    >
+                                                        <i class="fas fa-undo me-1"></i> Devolver
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                {% empty %}
+                                    <tr>
+                                        <td colspan="6" class="text-center text-muted py-4">
+                                            No hay préstamos en retraso.
+                                        </td>
+                                    </tr>
+                                {% endfor %}
                             </tbody>
                         </table>
                     </div>
-                    
-                    <!-- Paginación -->
-                    <div class="pagination-container">
-                        <div class="pagination-info">
-                            Mostrando 1-3 de 15 préstamos en retraso
+
+                    <!-- Modales para renovar préstamos en retraso -->
+                    {% for prestamo in prestamos_retraso %}
+                    <div class="modal fade" id="modalRenovarRetraso{{ prestamo.id }}" tabindex="-1" aria-labelledby="modalRenovarLabel{{ prestamo.id }}" aria-hidden="true">
+                        <div class="modal-dialog modal-dialog-centered">
+                            <div class="modal-content">
+                                <form method="post" action="#">
+                                    {% csrf_token %}
+                                    <div class="modal-header">
+                                        <h5 class="modal-title" id="modalRenovarLabel{{ prestamo.id }}">
+                                            Renovar préstamo
+                                        </h5>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                                    </div>
+                                    <div class="modal-body">
+                                        <p class="mb-2">
+                                            <strong>Libro:</strong> {{ prestamo.ejemplar.libro.titulo }}
+                                        </p>
+                                        <p class="mb-3">
+                                            <strong>Cliente:</strong>
+                                            {{ prestamo.cliente.usuario.nombre }} {{ prestamo.cliente.usuario.apellido }}
+                                        </p>
+
+                                        <div class="mb-3">
+                                            <label class="form-label fw-semibold">Fecha actual de devolución</label>
+                                            <input
+                                                type="text"
+                                                class="form-control"
+                                                value="{{ prestamo.fecha_fin|date:'d/m/Y' }}"
+                                                disabled
+                                            >
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <label for="nueva_fecha_fin_{{ prestamo.id }}" class="form-label fw-semibold">
+                                                Nueva fecha de devolución
+                                            </label>
+                                            <input
+                                                type="date"
+                                                name="nueva_fecha_fin"
+                                                id="nueva_fecha_fin_{{ prestamo.id }}"
+                                                class="form-control"
+                                                required
+                                                min="{{ prestamo.fecha_fin|date:'Y-m-d' }}"
+                                            >
+                                            <div class="form-text">
+                                                La nueva fecha debe ser mayor a la fecha actual de devolución.
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="modal-footer">
+                                        <button
+                                            type="button"
+                                            class="btn btn-secondary"
+                                            data-bs-dismiss="modal">
+                                            Cancelar
+                                        </button>
+                                        <button type="submit" class="btn btn-success">
+                                            <i class="fas fa-save me-1"></i> Guardar cambios
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
                         </div>
-                        <nav aria-label="Paginación de préstamos">
-                            <ul class="pagination">
-                                <li class="page-item disabled">
-                                    <a class="page-link" href="#" tabindex="-1" aria-disabled="true">
-                                        <i class="fas fa-chevron-left"></i>
-                                    </a>
-                                </li>
-                                <li class="page-item active"><a class="page-link" href="#">1</a></li>
-                                <li class="page-item"><a class="page-link" href="#">2</a></li>
-                                <li class="page-item"><a class="page-link" href="#">3</a></li>
-                                <li class="page-item"><a class="page-link" href="#">4</a></li>
-                                <li class="page-item"><a class="page-link" href="#">5</a></li>
-                                <li class="page-item">
-                                    <a class="page-link" href="#">
-                                        <i class="fas fa-chevron-right"></i>
-                                    </a>
-                                </li>
-                            </ul>
-                        </nav>
                     </div>
+                    {% endfor %}
+
+                    <!-- Paginación -->
+                    {% if prestamos_retraso.paginator.num_pages > 1 %}
+                        <div class="pagination-container">
+                            <div class="pagination-info">
+                                Página {{ prestamos_retraso.number }} de {{ prestamos_retraso.paginator.num_pages }}
+                            </div>
+                            <nav aria-label="Paginación de préstamos en retraso">
+                                <ul class="pagination mb-0">
+                                    {% if prestamos_retraso.has_previous %}
+                                        <li class="page-item">
+                                            <a class="page-link" href="?page={{ prestamos_retraso.previous_page_number }}">
+                                                <i class="fas fa-chevron-left"></i>
+                                            </a>
+                                        </li>
+                                    {% else %}
+                                        <li class="page-item disabled">
+                                            <span class="page-link">
+                                                <i class="fas fa-chevron-left"></i>
+                                            </span>
+                                        </li>
+                                    {% endif %}
+
+                                    {% for num in prestamos_retraso.paginator.page_range %}
+                                        {% if num == prestamos_retraso.number %}
+                                            <li class="page-item active">
+                                                <span class="page-link">{{ num }}</span>
+                                            </li>
+                                        {% else %}
+                                            <li class="page-item">
+                                                <a class="page-link" href="?page={{ num }}">{{ num }}</a>
+                                            </li>
+                                        {% endif %}
+                                    {% endfor %}
+
+                                    {% if prestamos_retraso.has_next %}
+                                        <li class="page-item">
+                                            <a class="page-link" href="?page={{ prestamos_retraso.next_page_number }}">
+                                                <i class="fas fa-chevron-right"></i>
+                                            </a>
+                                        </li>
+                                    {% else %}
+                                        <li class="page-item disabled">
+                                            <span class="page-link">
+                                                <i class="fas fa-chevron-right"></i>
+                                            </span>
+                                        </li>
+                                    {% endif %}
+                                </ul>
+                            </nav>
+                        </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
