@@ -15,6 +15,25 @@ services:
       # sobreescribir .env dentro del container
       DB_HOST: host.docker.internal
 
+
+# Servicio para ejecutar los tests de Django
+  tests:
+    build: . # Usa el mismo Dockerfile que 'web' para tener el entorno Python/Django
+    container_name: biblionet_v3_tests
+    # Comando estándar de Django para correr todos los tests
+    command: python manage.py test
+    volumes:
+      - .:/app # Monta el código fuente, incluyendo la carpeta de tests
+    env_file:
+      - .env
+    environment:
+      # Reusa DB_HOST para que los tests puedan encontrar la base de datos
+      DB_HOST: host.docker.internal
+    # Si la base de datos local está activa, depende de ella:
+    # Si la DB está en un contenedor, debes descomentar 'db' abajo y esta dependencia:
+    # depends_on:
+    #   - db
+    
   # docker default sin usar base local
   # db:
   #   image: mysql:8.0
