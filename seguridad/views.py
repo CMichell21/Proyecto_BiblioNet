@@ -218,23 +218,34 @@ def panel_bibliotecario(request):
     except Usuarios.DoesNotExist:
         return redirect("cerrar_sesion")
 
-    total_libros = Libros.objects.count()
-    prestamos_activos = Prestamos.objects.filter(estado="activo").count()
-    
     hoy = timezone.localdate()
-    prestamos_vencidos = Prestamos.objects.filter(
-        fecha_devolucion__isnull=True, 
-        fecha_fin__lt=hoy
-    ).count()
+
+    # Solo préstamos vencidos: sin devolución y con fecha_fin menor a hoy
+    prestamos_vencidos_qs = Prestamos.objects.select_related(
+        "ejemplar__libro",
+        "cliente__usuario",
+    ).filter(
+        fecha_devolucion__isnull=True,
+        fecha_fin__lt=hoy,
+    ).order_by("fecha_fin")
+
+    # Agregar días de retraso a cada préstamo
+    prestamos_lista = []
+    for p in prestamos_vencidos_qs:
+        p.dias_retraso = (hoy - p.fecha_fin).days
+        prestamos_lista.append(p)
+
+    # Paginación: 5 por página
+    paginator = Paginator(prestamos_lista, 5)
+    page_number = request.GET.get("page")
+    prestamos_retraso_page = paginator.get_page(page_number)
 
     contexto = {
         "usuario_actual": usuario_actual,
-        "total_libros": total_libros,
-        "prestamos_activos": prestamos_activos,
-        "prestamos_vencidos": prestamos_vencidos,
+        "prestamos_retraso": prestamos_retraso_page,
+        "prestamos_vencidos": prestamos_vencidos_qs.count(),  # solo esto se usa en el HTML
     }
     return render(request, "seguridad/bibliotecario_home.html", contexto)
-
 
 @requerir_rol("administrador")
 @csrf_protect
