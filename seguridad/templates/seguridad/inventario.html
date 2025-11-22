@@ -67,7 +67,7 @@
 
     <main class="main-content">
         <div class="container-fluid py-4">
-            <!-- Botones de Historial -->
+            <!-- Botones de Historial / Acciones -->
             <div class="row action-buttons">
                 <div class="col-md-3 mb-3">
                     <a href="{% url 'panel_bibliotecario' %}" class="btn btn-inventario w-100 btn-action">
@@ -87,16 +87,11 @@
                         Realizar Venta
                     </a>
                 </div>
-                <div class="col-md-3 mb-3">
-                    <a href="#" class="btn btn-compra w-100 btn-action">
-                        <i class="fas fa-shopping-cart me-2"></i>
-                        Realizar Compra
-                    </a>
-                </div>
                 <div class="col-md-3 mb-3 mx-auto">
-                    <a href="#" class="btn btn-prestamo w-100 btn-action">
+                    <!-- AQUÍ YA REDIRIGE A GESTIÓN DE PRÉSTAMOS -->
+                    <a href="{% url 'gestion_prestamos' %}" class="btn btn-prestamo w-100 btn-action">
                         <i class="fas fa-book me-2"></i>
-                        Gestión de prestamos
+                        Gestión de préstamos
                     </a>
                 </div>
             </div>
@@ -111,7 +106,7 @@
                     </button>
                 </div>
                 
-                <!-- Barra de búsqueda simplificada -->
+                <!-- Barra de búsqueda -->
                 <div class="card shadow-sm mb-4">
                     <div class="card-body">
                         <form method="GET" action="">
@@ -231,7 +226,7 @@
                             </table>
                         </div>
                         
-                        <!-- Información de resultados + paginación -->
+                        <!-- Info + paginación -->
                         <div class="d-flex justify-content-between align-items-center p-3 border-top">
                             <div class="text-muted">
                                 {% if page_obj.paginator.count > 0 %}
@@ -294,7 +289,7 @@
         </div>
     </main>
 
-    <!-- Modal para agregar nuevo libro -->
+    <!-- Modal agregar libro -->
     <div class="modal fade" id="agregarLibroModal" tabindex="-1" aria-labelledby="agregarLibroModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
@@ -363,7 +358,7 @@
         </div>
     </div>
 
-    <!-- Modal para editar libro -->
+    <!-- Modal editar libro -->
     <div class="modal fade" id="editarLibroModal" tabindex="-1" aria-labelledby="editarLibroModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
@@ -377,14 +372,21 @@
                     <input type="hidden" name="libro_id" id="edit_libro_id" value="">
                     <div class="modal-body">
                         <div class="row">
+                            <!-- ISBN solo lectura -->
                             <div class="col-md-6 mb-3">
                                 <label for="edit_isbn" class="form-label">ISBN</label>
-                                <input type="text" class="form-control" id="edit_isbn" name="isbn" 
-                                pattern="^\d{13}$" 
-                                title="El ISBN debe contener exactamente 13 dígitos numéricos sin espacios"
-                                required>
-                                <div class="form-text">Ingrese el código ISBN de 13 dígitos (solo números)</div>
+                                <input
+                                    type="text"
+                                    class="form-control bg-light"
+                                    id="edit_isbn"
+                                    value=""
+                                    readonly
+                                >
+                                <div class="form-text">
+                                    El ISBN es un identificador fijo y no puede modificarse.
+                                </div>
                             </div>
+
                             <div class="col-md-6 mb-3">
                                 <label for="edit_titulo" class="form-label">Título</label>
                                 <input type="text" class="form-control" id="edit_titulo" name="titulo" required>
@@ -438,7 +440,6 @@
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     
-    <!-- Solo esta pequeña función para cargar datos en el modal de editar -->
     <script>
     function cargarDatosLibro(id, isbn, titulo, autor, categoria, editorial, anio, stock) {
         document.getElementById('edit_libro_id').value = id;
