@@ -7,6 +7,8 @@ from django.utils import timezone
 from django.db import transaction
 from django.views.decorators.csrf import csrf_protect
 from django.core.paginator import Paginator
+from django.db import DatabaseError
+from seguridad.views import validar_fortaleza_contrasena
 
 from biblio.models import Usuarios, Roles, Clientes, Libros, Reservas
 
@@ -269,7 +271,7 @@ def cerrar_sesion_cliente(request):
     if "cliente_email" in request.session:
         del request.session["cliente_email"]
     
-    messages.success(request, "Sesión cerrada correctamente")
+    
     return redirect("inicio_sesion_cliente") 
 
 def lista_reservas_clientes(request):
@@ -400,3 +402,95 @@ def detalle_libro(request, libro_id):
     }
     return render(request, "publico/detalle_libro.html", contexto)
 
+###---------------RECUPERAR CONTRASEÑA CLIENTE------------------
+################################################################
+def recuperar_contrasena_cliente(request):
+    if request.method == 'POST':
+        step = request.POST.get('step', '1')
+        
+        if step == '1':
+            return paso_1_verificar_email_cliente(request)
+        elif step == '2':
+            return paso_2_nueva_contrasena_cliente(request)
+    
+    return render(request, 'publico/recuperar_contraseña_cliente.html', {'step': 1})
+
+def paso_1_verificar_email_cliente(request):
+    """Paso 1 para clientes - verifica email"""
+    email = request.POST.get('email', '').strip().lower()
+    
+    if not email:
+        return render(request, 'publico/recuperar_contraseña_cliente.html', {
+            'step': 1,
+            'email': email,
+            'error': 'Por favor, ingresa tu correo electrónico.'
+        })
+    
+    try:
+        # Buscar en Usuarios con rol de CLIENTE (rol_id = 1)
+        usuario = Usuarios.objects.get(email=email, rol_id=1, estado='activo')
+        
+        # Email válido, pasar al paso 2
+        return render(request, 'publico/recuperar_contraseña_cliente.html', {
+            'step': 2,
+            'email': email
+        })
+            
+    except Usuarios.DoesNotExist:
+        return render(request, 'publico/recuperar_contraseña_cliente.html', {
+            'step': 1,
+            'email': email,
+            'error': 'El correo electrónico no existe.'
+        })
+    except Exception as e:
+        return render(request, 'publico/recuperar_contraseña_cliente.html', {
+            'step': 1,
+            'email': email,
+            'error': 'Error en el sistema. Por favor, intente más tarde.'
+        })
+
+def paso_2_nueva_contrasena_cliente(request):
+    """Paso 2 para clientes"""
+    email = request.POST.get('email', '')
+    new_password = request.POST.get('new_password', '')
+    confirm_password = request.POST.get('confirm_password', '')
+    
+    # Validaciones
+    if new_password != confirm_password:
+        return render(request, 'publico/recuperar_contraseña_cliente.html', {
+            'step': 2,
+            'email': email,
+            'error': 'Las contraseñas no coinciden.'
+        })
+    
+    if not validar_fortaleza_contrasena(new_password):
+        return render(request, 'publico/recuperar_contraseña_cliente.html', {
+            'step': 2,
+            'email': email,
+            'error': 'La contraseña debe tener al menos 8 caracteres, incluir una letra mayúscula, una minúscula, un número y un carácter especial.'
+        })
+    
+    try:
+        # Buscar y actualizar el USUARIO con rol CLIENTE
+        usuario = Usuarios.objects.get(email=email, rol_id=1, estado='activo')
+        
+        # Actualizar la contraseña (campo 'clave')
+        usuario.clave = make_password(new_password)
+        usuario.save()
+        
+        # Pasar al paso 3 (éxito)
+        return render(request, 'publico/recuperar_contraseña_cliente.html', {
+            'step': 3
+        })
+        
+    except Usuarios.DoesNotExist:
+        return render(request, 'publico/recuperar_contraseña_cliente.html', {
+            'step': 1,
+            'error': 'Error en la recuperación. Por favor, inicie el proceso nuevamente.'
+        })
+    except DatabaseError:
+        return render(request, 'publico/recuperar_contraseña_cliente.html', {
+            'step': 2,
+            'email': email,
+            'error': 'Error al guardar la nueva contraseña. Por favor, intente nuevamente.'
+        })

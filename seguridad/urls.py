@@ -14,4 +14,6 @@ urlpatterns = [
     path("prestamos/registrar/", views.registrar_prestamo, name="registrar_prestamo"),
     path("empleados/<int:empleado_id>/editar/", views.editar_empleado, name="editar_empleado"),
     path("prestamos/<int:prestamo_id>/renovar/", views.renovar_prestamo, name="renovar_prestamo"),
+    path("prestamos/<int:prestamo_id>/devolver/", views.devolver_prestamo, name="devolver_prestamo"),
+    path('empleados/recuperar-contrasena/', views.recuperar_contrasena_empleado, name='recuperar_contrasena_empleado'),
 ]
