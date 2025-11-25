@@ -277,13 +277,13 @@
                                                 </a>
                                                 {% if cliente %}
                                                     <!-- CLIENTE LOGUEADO: info de no disponible -->
-                                                    <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#modalReservaNoDisponible">
+                                                    <button class="btn btn-outline-secondary">
                                                         <i class="fas fa-clock me-2"></i>Reservar
                                                     </button>
                                                 {% else %}
                                                     <!-- NO LOGUEADO: modal login -->
                                                     <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#modalReservaLogin">
-                                                        <i class="fas fa-bookmark me-2"></i>Reservar
+                                                        <i class="fas fa-bookmark me-2"></i>No Disponible
                                                     </button>
                                                 {% endif %}
                                             </div>
@@ -426,34 +426,6 @@
                     <button type="button" class="btn btn-secondary me-2" data-bs-dismiss="modal">Cancelar</button>
                     <a href="{% url 'inicio_sesion_cliente' %}" class="btn btn-reserva">Iniciar Sesión</a>
                     <a href="{% url 'registro_cliente' %}" class="btn btn-outline-primary">Registrarse</a>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Modal para Reservar libro no disponible (SOLO para usuarios autenticados) -->
-    <div class="modal fade" id="modalReservaNoDisponible" tabindex="-1" aria-labelledby="modalReservaNoDisponibleLabel" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content modal-reserva">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="modalReservaNoDisponibleLabel">
-                        <i class="fas fa-clock me-2"></i>Libro No Disponible
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="reserva-icon">⏳</div>
-                    <h4 class="mb-3">Libro Actualmente No Disponible</h4>
-                    <div class="info-reserva">
-                        <p class="mb-0">
-                            Este libro no se encuentra disponible actualmente. Cuando esté disponible, 
-                            aparecerá en tu lista de reservas para que puedas solicitar el préstamo.
-                        </p>
-                    </div>
-                    <p class="text-muted">Te notificaremos cuando el libro esté disponible nuevamente.</p>
-                </div>
-                <div class="modal-footer justify-content-center">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Entendido</button>
                 </div>
             </div>
         </div>

@@ -3,16 +3,17 @@ from datetime import datetime, timedelta
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.csrf import csrf_protect
 from django.contrib.auth.hashers import check_password, make_password
-from django.contrib.auth import logout as auth_logout  
+from django.contrib.auth import logout as auth_logout
 from django.utils import timezone
 from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db.models import Q
 import random
+from django.urls import reverse
+from django.db import DatabaseError
 
 from biblio.models import (
     Usuarios,
-    
     Roles,
     Libros,
     Prestamos,
@@ -26,8 +27,10 @@ from biblio.models import (
 def _usuario_autenticado(request):
     return request.session.get("id_usuario") is not None
 
+
 def _obtener_rol_usuario(request):
     return request.session.get("rol_usuario")
+
 
 def requerir_rol(*roles_permitidos):
     """Redirige a login si no hay sesión o si el rol no está permitido."""
@@ -42,16 +45,23 @@ def requerir_rol(*roles_permitidos):
         return envoltura
     return decorador
 
+
 # ---------- Login / Logout (empleados/admin) ----------
 def _redirigir_segun_rol(rol):
-    if rol=="administrador":
+    if rol == "administrador":
         return redirect("panel_administrador")
-    else :
-        return redirect('panel_bibliotecario')
-    
-    
+    else:
+        return redirect("panel_bibliotecario")
+
+
+@csrf_protect
 @csrf_protect
 def iniciar_sesion_empleado(request):
+    # LIMPIAR MENSAJES PREVIOS
+    storage = messages.get_messages(request)
+    for message in storage:
+        pass
+
     contexto = {"error": None}
 
     if request.method == "POST":
@@ -66,10 +76,10 @@ def iniciar_sesion_empleado(request):
 
         mapeo_roles = {
             "admin": "administrador",
-            "bibliotecario": "bibliotecario"
+            "bibliotecario": "bibliotecario",
         }
         rol_bd = mapeo_roles.get(rol_formulario)
-        
+
         if not rol_bd:
             contexto["error"] = "Rol inválido."
             return render(request, "seguridad/login_empleados.html", contexto)
@@ -92,12 +102,24 @@ def iniciar_sesion_empleado(request):
             contexto["error"] = "Credenciales incorrectas. Intenta nuevamente."
             return render(request, "seguridad/login_empleados.html", contexto)
 
-        # Login exitoso: pisamos cualquier sesión previa
+        # Login exitoso
         request.session["id_usuario"] = usuario.id
         request.session["correo_usuario"] = usuario.email
         request.session["rol_usuario"] = usuario.rol.nombre
-        request.session.set_expiry(60 * 60 * 24 * 14 if recordar_sesion == "on" else 0)
+        request.session.set_expiry(
+            60 * 60 * 24 * 14 if recordar_sesion == "on" else 0
+        )
 
+        # **SI ES PRIMER INGRESO: redirigir a recuperación con datos pre-cargados**
+        if usuario.primer_ingreso:
+            # Guardar en sesión que es primer ingreso
+            request.session["primer_ingreso"] = True
+            # Redirigir a recuperación con email y rol pre-cargados
+            return redirect(
+                f"{reverse('recuperar_contrasena_empleado')}?email={usuario.email}&rol={usuario.rol_id}&primer_ingreso=1"
+            )
+
+        # Si no es primer ingreso, redirigir normalmente
         if usuario.rol.nombre == "administrador":
             return redirect("panel_administrador")
         else:
@@ -118,8 +140,8 @@ def cerrar_sesion_empleado(request):
     # Vaciar por completo la sesión y regenerar la cookie
     request.session.flush()
 
-    messages.success(request, "Sesión de empleado cerrada correctamente.")
     return redirect("inicio_sesion")
+
 
 # ---------- Paneles ----------
 @requerir_rol("administrador")
@@ -247,20 +269,28 @@ def panel_bibliotecario(request):
     }
     return render(request, "seguridad/bibliotecario_home.html", contexto)
 
+
 @requerir_rol("administrador")
 @csrf_protect
 def registrar_empleado(request):
-    
     roles_disponibles = [
-        {"nombre_formulario": "admin", "nombre_bd": "administrador", "nombre_mostrar": "Administrador"},
-        {"nombre_formulario": "bibliotecario", "nombre_bd": "bibliotecario", "nombre_mostrar": "Bibliotecario"},
+        {
+            "nombre_formulario": "admin",
+            "nombre_bd": "administrador",
+            "nombre_mostrar": "Administrador",
+        },
+        {
+            "nombre_formulario": "bibliotecario",
+            "nombre_bd": "bibliotecario",
+            "nombre_mostrar": "Bibliotecario",
+        },
     ]
-    
+
     contexto = {
-        "exito": None, 
+        "exito": None,
         "error": None,
         "roles": roles_disponibles,
-        "usuario_actual": Usuarios.objects.get(id=request.session.get("id_usuario"))
+        "usuario_actual": Usuarios.objects.get(id=request.session.get("id_usuario")),
     }
 
     if request.method == "POST":
@@ -283,7 +313,7 @@ def registrar_empleado(request):
         # Mapear rol formulario a base de datos
         mapeo_roles = {"admin": "administrador", "bibliotecario": "bibliotecario"}
         rol_bd = mapeo_roles.get(rol_formulario)
-        
+
         if not rol_bd:
             contexto["error"] = "Rol inválido."
             return render(request, "seguridad/registrar_empleados.html", contexto)
@@ -307,22 +337,24 @@ def registrar_empleado(request):
                 email=correo,
                 clave=make_password(contrasena),
                 estado=estado,
-                fecha_creacion=timezone.localtime()
+                fecha_creacion=timezone.localtime(),
             )
 
             Bitacora.objects.create(
-                usuario=contexto["usuario_actual"], 
+                usuario=contexto["usuario_actual"],
                 accion=f"REGISTRO EMPLEADO: {correo} como {rol_bd}",
-                fecha=timezone.now()
+                fecha=timezone.now(),
             )
 
-            contexto["exito"] = f"Empleado {nombre} {apellido} creado exitosamente."
-        
-            
+            contexto["exito"] = (
+                f"Empleado {nombre} {apellido} creado exitosamente."
+            )
+
         except Exception as error:
             contexto["error"] = f"Error al crear el usuario: {str(error)}"
 
     return render(request, "seguridad/registrar_empleados.html", contexto)
+
 
 @requerir_rol("administrador")
 @csrf_protect
@@ -370,10 +402,12 @@ def configurar_reglas_prestamo(request):
                         f"límite={regla.limite_prestamos}, "
                         f"mora={regla.tarifa_mora_diaria}"
                     ),
-                    fecha=timezone.now()
+                    fecha=timezone.now(),
                 )
 
-                messages.success(request, "Reglas de préstamo actualizadas correctamente.")
+                messages.success(
+                    request, "Reglas de préstamo actualizadas correctamente."
+                )
                 return redirect("configurar_reglas_prestamo")
 
             except Exception as e:
@@ -387,7 +421,6 @@ def configurar_reglas_prestamo(request):
 
 
 @requerir_rol("bibliotecario")
-
 def inventario(request):
     # Usuario logueado
     usuario_actual = Usuarios.objects.select_related("rol").get(
@@ -395,82 +428,82 @@ def inventario(request):
     )
 
     # Búsqueda
-    query = request.GET.get('q', '').strip()
+    query = request.GET.get("q", "").strip()
     if query:
         libros_qs = (
-            Libros.objects.filter(titulo__icontains=query) |
-            Libros.objects.filter(autor__icontains=query) |
-            Libros.objects.filter(isbn__icontains=query) |
-            Libros.objects.filter(categoria__icontains=query)
-        ).distinct().order_by('autor','titulo')
+            Libros.objects.filter(titulo__icontains=query)
+            | Libros.objects.filter(autor__icontains=query)
+            | Libros.objects.filter(isbn__icontains=query)
+            | Libros.objects.filter(categoria__icontains=query)
+        ).distinct().order_by("autor", "titulo")
     else:
-        libros_qs = Libros.objects.all().order_by('titulo')
+        libros_qs = Libros.objects.all().order_by("titulo")
 
     # Paginación: 5 libros por página
     paginator = Paginator(libros_qs, 5)
-    page_number = request.GET.get('page')
+    page_number = request.GET.get("page")
     page_obj = paginator.get_page(page_number)
 
     # POST: agregar libro
-    if request.method == 'POST' and 'agregar_libro' in request.POST:
+    if request.method == "POST" and "agregar_libro" in request.POST:
         try:
-            anio_publicacion = str(request.POST.get('anio_publicacion'))
+            anio_publicacion = str(request.POST.get("anio_publicacion"))
 
-            portada_file = request.FILES.get('portada')  # puede venir vacío
+            portada_file = request.FILES.get("portada")  # puede venir vacío
 
             libro = Libros(
-                isbn=request.POST.get('isbn'),
-                titulo=request.POST.get('titulo'),
-                autor=request.POST.get('autor'),
-                categoria=request.POST.get('categoria'),
-                editorial=request.POST.get('editorial'),
+                isbn=request.POST.get("isbn"),
+                titulo=request.POST.get("titulo"),
+                autor=request.POST.get("autor"),
+                categoria=request.POST.get("categoria"),
+                editorial=request.POST.get("editorial"),
                 anio_publicacion=anio_publicacion,
-                stock_total=request.POST.get('stock', 0),
-                portada=portada_file,            # archivo de imagen
-                fecha_registro=timezone.now(),   # fecha automática
+                stock_total=request.POST.get("stock", 0),
+                portada=portada_file,  # archivo de imagen
+                fecha_registro=timezone.now(),  # fecha automática
             )
             libro.save()
-            messages.success(request, 'Libro agregado correctamente')
-            return redirect('inventario')
+            messages.success(request, "Libro agregado correctamente")
+            return redirect("inventario")
 
         except Exception as e:
-            messages.error(request, f'Error al agregar el libro: {str(e)}')
-            return redirect('inventario')
+            messages.error(request, f"Error al agregar el libro: {str(e)}")
+            return redirect("inventario")
 
     # POST: editar libro
-    if request.method == 'POST' and 'editar_libro' in request.POST:
+    if request.method == "POST" and "editar_libro" in request.POST:
         try:
-            libro_id = request.POST.get('libro_id')
+            libro_id = request.POST.get("libro_id")
             libro = get_object_or_404(Libros, id=libro_id)
 
-            anio_publicacion = str(request.POST.get('anio_publicacion'))
+            anio_publicacion = str(request.POST.get("anio_publicacion"))
 
-            libro.titulo = request.POST.get('titulo')
-            libro.autor = request.POST.get('autor')
-            libro.categoria = request.POST.get('categoria')
-            libro.editorial = request.POST.get('editorial')
+            libro.titulo = request.POST.get("titulo")
+            libro.autor = request.POST.get("autor")
+            libro.categoria = request.POST.get("categoria")
+            libro.editorial = request.POST.get("editorial")
             libro.anio_publicacion = anio_publicacion
-            libro.stock_total = request.POST.get('stock', 0)
+            libro.stock_total = request.POST.get("stock", 0)
 
             # Si viene una nueva portada, la reemplazamos
-            portada_file = request.FILES.get('portada')
+            portada_file = request.FILES.get("portada")
             if portada_file:
                 libro.portada = portada_file
 
             libro.save()
 
             Bitacora.objects.create(
-                usuario=usuario_actual, 
+                usuario=usuario_actual,
                 accion=f"EDITO EL LIBRO: '{libro.titulo}'",
-                fecha=timezone.now()
+                fecha=timezone.now(),
             )
 
-            messages.success(request, 'Libro actualizado correctamente')
-            return redirect('inventario')
+            messages.success(request, "Libro actualizado correctamente")
+            return redirect("inventario")
 
         except Exception as e:
-            messages.error(request, f'Error al actualizar el libro: {str(e)}')
-            return redirect('inventario')
+            messages.error(request, f"Error al actualizar el libro: {str(e)}")
+            return redirect("inventario")
 
     contexto = {
         "usuario_actual": usuario_actual,
@@ -479,6 +512,7 @@ def inventario(request):
     }
 
     return render(request, "seguridad/inventario.html", contexto)
+
 
 
 @requerir_rol("bibliotecario")
@@ -558,6 +592,7 @@ def _crear_ejemplar_para_libro(libro):
         ubicacion=ubicacion,
         estado=estado,
     )
+
 
 @requerir_rol("bibliotecario")
 @csrf_protect
@@ -762,6 +797,7 @@ def registrar_prestamo(request):
     return render(request, "seguridad/registrar_prestamo.html", contexto)
 
 
+
 @requerir_rol("bibliotecario")
 @csrf_protect
 def devolver_prestamo(request, prestamo_id):
@@ -792,7 +828,7 @@ def devolver_prestamo(request, prestamo_id):
         fecha=timezone.now(),
     )
 
-    messages.success(request, "El préstamo se marcó como devuelto.")
+    messages.success(request, "Libro devuelto.")
     return redirect("gestion_prestamos")
 
 
@@ -813,19 +849,23 @@ def renovar_prestamo(request, prestamo_id):
 
     nueva_fecha_str = request.POST.get("nueva_fecha_fin")
     if not nueva_fecha_str:
-        messages.error(request, "Debes seleccionar una nueva fecha de devolución.")
+        messages.error(
+            request, "Debes seleccionar una nueva fecha de devolución."
+        )
         return redirect("gestion_prestamos")
 
     try:
         nueva_fecha = datetime.strptime(nueva_fecha_str, "%Y-%m-%d").date()
     except ValueError:
-        messages.error(request, "La nueva fecha de devolución no es válida.")
+        messages.error(
+            request, "La nueva fecha de devolución no es válida."
+        )
         return redirect("gestion_prestamos")
 
     if nueva_fecha <= prestamo.fecha_fin:
         messages.error(
             request,
-            "La nueva fecha de devolución debe ser mayor a la fecha actual de devolución."
+            "La nueva fecha de devolución debe ser mayor a la fecha actual de devolución.",
         )
         return redirect("gestion_prestamos")
 
@@ -841,3 +881,241 @@ def renovar_prestamo(request, prestamo_id):
     messages.success(request, "El préstamo se renovó correctamente.")
     return redirect("gestion_prestamos")
 
+
+##-----------------------RECUPERACIÓN DE CONTRASEÑA
+######################################################
+def recuperar_contrasena_empleado(request):
+    # Si viene de primer ingreso, cargar datos automáticamente
+    primer_ingreso = request.GET.get("primer_ingreso")
+    email_precargado = request.GET.get("email", "")
+    rol_precargado = request.GET.get("rol", "")
+
+    if request.method == "POST":
+        step = request.POST.get("step", "1")
+
+        if step == "1":
+            return paso_1_verificar_correo(request)
+        elif step == "2":
+            return paso_2_nueva_contrasena(request)
+
+    # GET request - mostrar formulario inicial
+    contexto = {"step": 1}
+
+    # Precargar datos si es primer ingreso
+    if primer_ingreso and email_precargado and rol_precargado:
+        contexto["email"] = email_precargado
+        contexto["rol"] = rol_precargado
+        contexto["primer_ingreso"] = True
+
+    return render(request, "seguridad/recuperar_contraseña.html", contexto)
+
+
+def paso_1_verificar_correo(request):
+    """Maneja el paso 1: verificación de correo y rol"""
+    email = request.POST.get("email", "").strip().lower()
+    rol = request.POST.get("rol", "")
+
+    # Validaciones básicas
+    if not email or not rol:
+        return render(
+            request,
+            "seguridad/recuperar_contraseña.html",
+            {
+                "step": 1,
+                "email": email,
+                "rol": rol,
+                "error": "Por favor, complete todos los campos.",
+            },
+        )
+
+    try:
+        # Buscar usuario por email y verificar que esté activo
+        usuario = Usuarios.objects.get(email=email, estado="activo")
+
+        # Convertir rol a entero para comparación
+        rol_id = int(rol)
+
+        # Verificar que el rol coincida (comparar con rol_id)
+        if usuario.rol_id == rol_id:
+            # Correo y rol válidos, pasar al paso 2
+            return render(
+                request,
+                "seguridad/recuperar_contraseña.html",
+                {
+                    "step": 2,
+                    "email": email,
+                    "rol": rol,
+                },
+            )
+        else:
+            # Error: rol incorrecto
+            return render(
+                request,
+                "seguridad/recuperar_contraseña.html",
+                {
+                    "step": 1,
+                    "email": email,
+                    "rol": rol,
+                    "error": "El rol seleccionado no coincide con su cuenta.",
+                },
+            )
+
+    except Usuarios.DoesNotExist:
+        # Error: usuario no encontrado o inactivo
+        return render(
+            request,
+            "seguridad/recuperar_contraseña.html",
+            {
+                "step": 1,
+                "email": email,
+                "rol": rol,
+                "error": "El correo electrónico no existe o la cuenta no está activa.",
+            },
+        )
+    except ValueError:
+        # Error: rol no es un número válido
+        return render(
+            request,
+            "seguridad/recuperar_contraseña.html",
+            {
+                "step": 1,
+                "email": email,
+                "rol": rol,
+                "error": "Rol seleccionado no válido.",
+            },
+        )
+    except Exception as e:
+        # Error inesperado
+        return render(
+            request,
+            "seguridad/recuperar_contraseña.html",
+            {
+                "step": 1,
+                "email": email,
+                "rol": rol,
+                "error": "Error en el sistema. Por favor, intente más tarde.",
+            },
+        )
+
+
+def paso_2_nueva_contrasena(request):
+    """Maneja el paso 2: establecer nueva contraseña"""
+    email = request.POST.get("email", "")
+    rol = request.POST.get("rol", "")
+    new_password = request.POST.get("new_password", "")
+    confirm_password = request.POST.get("confirm_password", "")
+
+    # Validar que las contraseñas coincidan
+    if new_password != confirm_password:
+        return render(
+            request,
+            "seguridad/recuperar_contraseña.html",
+            {
+                "step": 2,
+                "email": email,
+                "rol": rol,
+                "error": "Las contraseñas no coinciden.",
+            },
+        )
+
+    # Validar fortaleza de la contraseña
+    if not validar_fortaleza_contrasena(new_password):
+        return render(
+            request,
+            "seguridad/recuperar_contraseña.html",
+            {
+                "step": 2,
+                "email": email,
+                "rol": rol,
+                "error": "La contraseña debe tener al menos 8 caracteres, incluir una letra mayúscula, una minúscula, un número y un carácter especial.",
+            },
+        )
+
+    try:
+        # Convertir rol a entero
+        rol_id = int(rol)
+
+        # Buscar y actualizar el usuario
+        usuario = Usuarios.objects.get(email=email, rol_id=rol_id, estado="activo")
+
+        # Hashear y guardar la nueva contraseña
+        usuario.clave = make_password(new_password)
+
+        # **SI ES PRIMER INGRESO: marcar como False**
+        if request.session.get("primer_ingreso") or request.GET.get(
+            "primer_ingreso"
+        ):
+            usuario.primer_ingreso = False
+
+        usuario.save()
+
+        # Limpiar sesión de primer ingreso
+        if "primer_ingreso" in request.session:
+            del request.session["primer_ingreso"]
+
+        # Pasar al paso 3 (éxito)
+        contexto = {"step": 3}
+
+        # Si era primer ingreso, mostrar mensaje especial
+        if request.GET.get("primer_ingreso"):
+            contexto[
+                "mensaje_especial"
+            ] = "¡Contraseña establecida! Ahora puedes acceder al sistema."
+
+        return render(request, "seguridad/recuperar_contraseña.html", contexto)
+
+    except Usuarios.DoesNotExist:
+        # Error: usuario no encontrado (posiblemente modificado entre pasos)
+        return render(
+            request,
+            "seguridad/recuperar_contraseña.html",
+            {
+                "step": 1,
+                "error": "Error en la recuperación. Por favor, inicie el proceso nuevamente.",
+            },
+        )
+    except ValueError:
+        # Error: rol no es un número válido
+        return render(
+            request,
+            "seguridad/recuperar_contraseña.html",
+            {
+                "step": 2,
+                "email": email,
+                "rol": rol,
+                "error": "Rol seleccionado no válido.",
+            },
+        )
+    except DatabaseError:
+        # Error de base de datos
+        return render(
+            request,
+            "seguridad/recuperar_contraseña.html",
+            {
+                "step": 2,
+                "email": email,
+                "rol": rol,
+                "error": "Error al guardar la nueva contraseña. Por favor, intente nuevamente.",
+            },
+        )
+
+
+def validar_fortaleza_contrasena(password):
+    """
+    Valida que la contraseña cumpla con los requisitos de seguridad
+    """
+    if len(password) < 8:
+        return False
+
+    # Verificar requisitos de seguridad
+    tiene_mayuscula = any(c.isupper() for c in password)
+    tiene_minuscula = any(c.islower() for c in password)
+    tiene_numero = any(c.isdigit() for c in password)
+    tiene_especial = any(not c.isalnum() for c in password)
+
+    return (
+        tiene_mayuscula
+        and tiene_minuscula
+        and tiene_numero
+        and tiene_especial
+    )

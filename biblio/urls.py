@@ -15,4 +15,5 @@ urlpatterns = [
     path("cerrar_sesion_cliente/", views.cerrar_sesion_cliente, name="cerrar_sesion_cliente"),
     path("reservas/", views.lista_reservas_clientes, name="lista_reservas_clientes"),
     path("cliente/reservas/<int:reserva_id>/cancelar/", views.cancelar_reserva, name="cancelar_reserva"),
+    path('clientes/recuperar-contrasena/', views.recuperar_contrasena_cliente, name='recuperar_contrasena_cliente'),
 ]
