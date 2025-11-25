@@ -1,0 +1,201 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuración de Reglas de Préstamo</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{% static 'css/administrador.css' %}">
+</head>
+
+<body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark navbar-custom">
+        <div class="container">
+            <a class="navbar-brand d-flex align-items-center" href="{% url 'panel_administrador' %}">
+                <img src="{% static 'imagenes/logo.jpg' %}" alt="Logo BiblioNet" class="me-2 brand-logo">
+                <span class="brand-text">BiblioNet</span>
+            </a>
+            
+            <div class="navbar-nav ms-auto">
+                <div class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle d-flex align-items-center nav-link-custom" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                        <img src="{% static 'imagenes/foto_perfil.jpeg' %}" alt="Usuario" class="rounded-circle me-2 user-avatar">
+                        <span class="user-name">{{ usuario_actual.nombre }} {{ usuario_actual.apellido }}</span>
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item" href="#"><i class="fas fa-user-edit me-2"></i>Mi Perfil</a></li>
+                        <li><a class="dropdown-item" href="#"><i class="fas fa-cog me-2"></i>Configuración</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <a class="dropdown-item text-danger" href="{% url 'cerrar_sesion' %}">
+                                <i class="fas fa-sign-out-alt me-2"></i>Cerrar Sesión
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>                   
+        </div>
+    </nav>
+
+    <main class="main-content">
+        <div class="container-fluid costum_bg_color py-4">
+
+            <!-- Mensajes -->
+            {% if messages %}
+                <div class="mb-3">
+                    {% for message in messages %}
+                        <div class="alert alert-{{ message.tags }} mb-1">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+
+            <!-- Título + botón volver -->
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h3 class="mb-0">
+                    <i class="fas fa-sliders-h me-2"></i>
+                    Configuración de reglas de préstamo
+                </h3>
+                <a href="{% url 'panel_administrador' %}" class="btn btn-primary btn-sm">
+                    <i class="fas fa-arrow-left me-1"></i> Volver al panel
+                </a>
+            </div>
+
+            <div class="row">
+                <!-- Columna izquierda: reglas vigentes -->
+                <div class="col-lg-5 mb-4">
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-white">
+                            <h5 class="card-title mb-0">
+                                <i class="fas fa-info-circle me-2"></i>
+                                Reglas vigentes
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            {% if regla %}
+                                <p class="mb-2">
+                                    <strong>Plazo de préstamo:</strong><br>
+                                    {{ regla.plazo_dias }} día(s)
+                                </p>
+                                <p class="mb-2">
+                                    <strong>Límite de préstamos por cliente:</strong><br>
+                                    {{ regla.limite_prestamos }} ejemplar(es)
+                                </p>
+                                <p class="mb-2">
+                                    <strong>Mora diaria:</strong><br>
+                                    L {{ regla.tarifa_mora_diaria }} por día de atraso
+                                </p>
+                                <p class="mb-2">
+                                    <strong>Descripción:</strong><br>
+                                    {{ regla.descripcion|default:"Reglas generales de préstamo" }}
+                                </p>
+                                <p class="text-muted small mb-0">
+                                    <i class="fas fa-clock me-1"></i>
+                                    Última actualización:
+                                    {% if regla.fecha_actualizacion %}
+                                        {{ regla.fecha_actualizacion|date:"d/m/Y H:i" }}
+                                    {% else %}
+                                        No registrada
+                                    {% endif %}
+                                </p>
+                            {% else %}
+                                <div class="text-center py-3">
+                                    <i class="fas fa-exclamation-circle fa-2x text-muted mb-2"></i>
+                                    <p class="mb-0 text-muted">
+                                        Aún no se han configurado reglas de préstamo.
+                                    </p>
+                                    <small class="text-muted">
+                                        Completa el formulario de la derecha para crear la primera configuración.
+                                    </small>
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Columna derecha: formulario -->
+                <div class="col-lg-7 mb-4">
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-white">
+                            <h5 class="card-title mb-0">
+                                <i class="fas fa-edit me-2"></i>
+                                Editar configuración
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <form method="post">
+                                {% csrf_token %}
+                                
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">
+                                        Plazo de préstamo (días)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        name="plazo_dias"
+                                        class="form-control"
+                                        min="1"
+                                        required
+                                        value="{% if regla %}{{ regla.plazo_dias }}{% endif %}"
+                                    >
+                                    <div class="form-text">
+                                        Número máximo de días que el cliente puede tener un ejemplar prestado.
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">
+                                        Límite de préstamos por cliente
+                                    </label>
+                                    <input
+                                        type="number"
+                                        name="limite_prestamos"
+                                        class="form-control"
+                                        min="1"
+                                        required
+                                        value="{% if regla %}{{ regla.limite_prestamos }}{% endif %}"
+                                    >
+                                    <div class="form-text">
+                                        Cantidad máxima de ejemplares que un cliente puede tener prestados al mismo tiempo.
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">
+                                        Tarifa de mora diaria (Lempiras)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        name="tarifa_mora_diaria"
+                                        class="form-control"
+                                        required
+                                        value="{% if regla %}{{ regla.tarifa_mora_diaria }}{% endif %}"
+                                    >
+                                    <div class="form-text">
+                                        Monto a cobrar por cada día de atraso, por ejemplar.
+                                    </div>
+                                </div>
+
+                                <div class="text-end">
+                                    <button type="submit" class="btn btn-success">
+                                        <i class="fas fa-save me-1"></i>
+                                        Guardar reglas de préstamo
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div> <!-- /col derecha -->
+            </div> <!-- /row -->
+        </div>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
