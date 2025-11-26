@@ -1545,3 +1545,103 @@ def comprobante_compra_pdf(request, compra_id):
         return HttpResponse("Ocurrió un error al generar el PDF.", status=500)
 
     return response
+
+
+##############################################################################
+##----------------------------MI PERFIL -----------------------------------##
+#############################################################################
+
+
+def mi_perfil(request):
+    # Intentar obtener sesión de EMPLEADO o de CLIENTE
+    usuario_id = request.session.get("id_usuario")    # admin / bibliotecario
+    cliente_id = request.session.get("cliente_id")    # cliente (OJO: mismo nombre que en login)
+
+    # Si no hay ninguno logueado, fuera
+    if not usuario_id and not cliente_id:
+        # Aquí puedes decidir a cuál login mandar; yo pondría el público
+        return redirect("inicio_sesion_cliente")
+
+    # ------------------------------------------------------------------
+    # CASO 1: Empleado logueado (admin / bibliotecario u otro rol)
+    # ------------------------------------------------------------------
+    if usuario_id:
+        usuario = get_object_or_404(
+            Usuarios.objects.select_related("rol"),
+            id=usuario_id
+        )
+        # Si este usuario también tiene ficha de cliente, la traemos (puede ser None)
+        cliente = Clientes.objects.filter(usuario=usuario).first()
+
+    # ------------------------------------------------------------------
+    # CASO 2: Cliente logueado (solo tiene cliente_id en sesión)
+    # ------------------------------------------------------------------
+    else:
+        cliente = get_object_or_404(
+            Clientes.objects.select_related("usuario__rol"),
+            id=cliente_id
+        )
+        usuario = cliente.usuario   # usuario asociado al cliente
+
+    # -----------------------------
+    # POST → actualizar información
+    # -----------------------------
+    if request.method == "POST":
+        # Datos que sí se pueden editar del usuario
+        nombre = (request.POST.get("nombre") or "").strip()
+        apellido = (request.POST.get("apellido") or "").strip()
+
+        # Solo teléfono del cliente será editable (si hay cliente)
+        telefono = (request.POST.get("telefono") or "").strip()
+
+        # Foto de perfil
+        foto = request.FILES.get("foto_perfil")
+
+        # Validaciones básicas
+        if not nombre or not apellido:
+            messages.error(request, "Nombre y apellido son obligatorios.")
+            return redirect("mi_perfil")
+
+        # Actualizar datos del usuario (NO se toca el correo aquí)
+        usuario.nombre = nombre
+        usuario.apellido = apellido
+
+        if foto:
+            usuario.foto_perfil = foto
+
+        try:
+            usuario.save()
+        except DatabaseError:
+            messages.error(request, "Error al guardar los datos del usuario.")
+            return redirect("mi_perfil")
+
+        # Si tiene registro de cliente, actualizamos SOLO el teléfono
+        if cliente:
+            cliente.telefono = telefono or None
+            # NO se modifica cliente.dni
+            # NO se modifica ningún campo que use el correo como identidad
+            try:
+                cliente.save()
+            except DatabaseError:
+                messages.error(request, "Error al guardar los datos del cliente.")
+                return redirect("mi_perfil")
+
+        # Registrar en bitácora
+        Bitacora.objects.create(
+            usuario=usuario,
+            accion=f"ACTUALIZÓ SU PERFIL (rol={usuario.rol.nombre})",
+            fecha=timezone.now(),
+        )
+
+        messages.success(request, "Perfil actualizado correctamente.")
+        return redirect("mi_perfil")
+
+    # -----------------------------
+    # GET → mostrar pantalla de perfil
+    # -----------------------------
+    contexto = {
+        "usuario_actual": usuario,  # para navbar
+        "usuario": usuario,
+        "cliente": cliente,         # puede ser None si es solo empleado
+    }
+    return render(request, "seguridad/mi_perfil.html", contexto)

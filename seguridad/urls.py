@@ -19,4 +19,5 @@ urlpatterns = [
     path("compras/gestion/", views.gestion_compras, name="gestion_compras"),
     path("proveedores/", views.gestion_proveedores, name="gestion_proveedores"),
     path("compras/comprobante/<int:compra_id>/", views.comprobante_compra_pdf,name="comprobante_compra_pdf"),
+    path("mi-perfil/", views.mi_perfil, name="mi_perfil"),
 ]
