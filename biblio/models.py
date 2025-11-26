@@ -48,6 +48,7 @@ class Usuarios(models.Model):
     estado = models.CharField(max_length=20, blank=True, null=True)
     fecha_creacion = models.DateTimeField( blank=True, null=True)
     primer_ingreso = models.BooleanField(default=True)
+    foto_perfil = models.ImageField(upload_to="perfiles/", blank=True, null=True)
 
     class Meta:
         managed = False

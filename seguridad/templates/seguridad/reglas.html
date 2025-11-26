@@ -21,12 +21,20 @@
             
             <div class="navbar-nav ms-auto">
                 <div class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle d-flex align-items-center nav-link-custom" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                        <img src="{% static 'imagenes/foto_perfil.jpeg' %}" alt="Usuario" class="rounded-circle me-2 user-avatar">
+                    <a class="nav-link dropdown-toggle d-flex align-items-center nav-link-custom"
+                       href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                       {% if usuario_actual.foto_perfil %}
+                          <img src="{{ usuario_actual.foto_perfil.url }}"
+                            alt="Usuario"
+                            class="rounded-circle me-2 user-avatar"
+                            style="object-fit: cover;">
+                        {% else %}
+                          <img src="{% static 'imagenes/foto_perfil.jpeg' %}" alt="Usuario" class="rounded-circle me-2 user-avatar">
+                        {% endif %}
                         <span class="user-name">{{ usuario_actual.nombre }} {{ usuario_actual.apellido }}</span>
                     </a>
                     <ul class="dropdown-menu dropdown-menu-end">
-                        <li><a class="dropdown-item" href="#"><i class="fas fa-user-edit me-2"></i>Mi Perfil</a></li>
+                        <li><a class="dropdown-item" href="{% url 'mi_perfil' %}"><i class="fas fa-user-edit me-2"></i>Mi Perfil</a></li>
                         <li><a class="dropdown-item" href="#"><i class="fas fa-cog me-2"></i>Configuración</a></li>
                         <li><hr class="dropdown-divider"></li>
                         <li>
@@ -54,15 +62,16 @@
                 </div>
             {% endif %}
 
-            <!-- Título + botón volver -->
-            <div class="d-flex justify-content-between align-items-center mb-3">
+            <!-- Título + botón volver (modificado) -->
+            <div class="d-flex justify-content-start align-items-center mb-3">
+                <a href="{% url 'panel_administrador' %}" class="btn btn-warning btn-sm me-3">
+                    <i class="fas fa-arrow-left me-1"></i> Volver al panel
+                </a>
+
                 <h3 class="mb-0">
                     <i class="fas fa-sliders-h me-2"></i>
                     Configuración de reglas de préstamo
                 </h3>
-                <a href="{% url 'panel_administrador' %}" class="btn btn-primary btn-sm">
-                    <i class="fas fa-arrow-left me-1"></i> Volver al panel
-                </a>
             </div>
 
             <div class="row">
