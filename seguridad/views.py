@@ -8,9 +8,10 @@ from django.utils import timezone
 from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db.models import Q
-import random
+import random, re
 from django.urls import reverse
 from django.db import DatabaseError
+
 
 from biblio.models import (
     Usuarios,
@@ -21,6 +22,9 @@ from biblio.models import (
     ReglasPrestamo,
     Clientes,
     Ejemplares,
+    Compras,
+    Proveedores,
+    DetalleCompras
 )
 
 # ---------- Helpers de sesión / roles ----------
@@ -53,8 +57,6 @@ def _redirigir_segun_rol(rol):
     else:
         return redirect("panel_bibliotecario")
 
-
-@csrf_protect
 @csrf_protect
 def iniciar_sesion_empleado(request):
     # LIMPIAR MENSAJES PREVIOS
@@ -65,33 +67,33 @@ def iniciar_sesion_empleado(request):
     contexto = {"error": None}
 
     if request.method == "POST":
-        correo = request.POST.get("email", "").strip()
+        correo = (request.POST.get("email") or "").strip().lower()
         contrasena = request.POST.get("password", "")
-        rol_formulario = request.POST.get("rol", "")
         recordar_sesion = request.POST.get("remember", "")
 
-        if not correo or not contrasena or not rol_formulario:
-            contexto["error"] = "Completa correo, contraseña y rol."
-            return render(request, "seguridad/login_empleados.html", contexto)
-
-        mapeo_roles = {
-            "admin": "administrador",
-            "bibliotecario": "bibliotecario",
-        }
-        rol_bd = mapeo_roles.get(rol_formulario)
-
-        if not rol_bd:
-            contexto["error"] = "Rol inválido."
+        # Validación básica
+        if not correo or not contrasena:
+            contexto["error"] = "Completa correo y contraseña."
             return render(request, "seguridad/login_empleados.html", contexto)
 
         try:
+            # Buscar usuario activo que sea administrador o bibliotecario
             usuario = Usuarios.objects.select_related("rol").get(
-                email=correo, rol__nombre=rol_bd, estado="activo"
+                email=correo,
+                estado="activo",
+                rol__nombre__in=["administrador", "bibliotecario"],
             )
         except Usuarios.DoesNotExist:
             contexto["error"] = "Credenciales incorrectas. Intenta nuevamente."
             return render(request, "seguridad/login_empleados.html", contexto)
+        except Usuarios.MultipleObjectsReturned:
+            contexto["error"] = (
+                "Existen múltiples cuentas asociadas a este correo. "
+                "Contacta al administrador del sistema."
+            )
+            return render(request, "seguridad/login_empleados.html", contexto)
 
+        # Verificar contraseña (soporta hasheadas y planas viejas)
         contrasena_bd = usuario.clave or ""
         if contrasena_bd.startswith(("pbkdf2_", "argon2$", "bcrypt$")):
             coincide = check_password(contrasena, contrasena_bd)
@@ -102,29 +104,30 @@ def iniciar_sesion_empleado(request):
             contexto["error"] = "Credenciales incorrectas. Intenta nuevamente."
             return render(request, "seguridad/login_empleados.html", contexto)
 
-        # Login exitoso
+        # Login exitoso → guardar datos básicos en sesión
         request.session["id_usuario"] = usuario.id
         request.session["correo_usuario"] = usuario.email
         request.session["rol_usuario"] = usuario.rol.nombre
+
+        # Recordar sesión (14 días) o sesión normal (hasta cerrar navegador)
         request.session.set_expiry(
             60 * 60 * 24 * 14 if recordar_sesion == "on" else 0
         )
 
-        # **SI ES PRIMER INGRESO: redirigir a recuperación con datos pre-cargados**
-        if usuario.primer_ingreso:
-            # Guardar en sesión que es primer ingreso
+        # SI ES PRIMER INGRESO Y ES ADMIN/BIBLIOTECARIO → obligar a cambiar contraseña
+        if usuario.primer_ingreso and usuario.rol.nombre in ("administrador", "bibliotecario"):
             request.session["primer_ingreso"] = True
-            # Redirigir a recuperación con email y rol pre-cargados
-            return redirect(
-                f"{reverse('recuperar_contrasena_empleado')}?email={usuario.email}&rol={usuario.rol_id}&primer_ingreso=1"
-            )
+            url_recuperar = reverse("recuperar_contrasena_empleado")
+            # Mandamos SOLO el correo + flag de primer ingreso
+            return redirect(f"{url_recuperar}?email={usuario.email}&primer_ingreso=1")
 
-        # Si no es primer ingreso, redirigir normalmente
+        # Si no es primer ingreso → flujo normal según rol
         if usuario.rol.nombre == "administrador":
             return redirect("panel_administrador")
         else:
             return redirect("panel_bibliotecario")
 
+    # GET → mostrar formulario
     return render(request, "seguridad/login_empleados.html", contexto)
 
 
@@ -882,130 +885,117 @@ def renovar_prestamo(request, prestamo_id):
     return redirect("gestion_prestamos")
 
 
-##-----------------------RECUPERACIÓN DE CONTRASEÑA
-######################################################
+##########################################################
+##-----------------------RECUPERACIÓN DE CONTRASEÑA-------
+##########################################################
+
 def recuperar_contrasena_empleado(request):
-    # Si viene de primer ingreso, cargar datos automáticamente
-    primer_ingreso = request.GET.get("primer_ingreso")
-    email_precargado = request.GET.get("email", "")
-    rol_precargado = request.GET.get("rol", "")
+    """
+    Vista principal de recuperación / establecimiento de contraseña.
+    """
+    # Detectar si viene marcado como primer ingreso (GET o POST)
+    primer_ingreso_flag = (
+        request.GET.get("primer_ingreso") == "1"
+        or request.POST.get("primer_ingreso") == "1"
+        or request.session.get("primer_ingreso") is True
+    )
+
+    email_precargado = request.GET.get("email", "").strip().lower()
 
     if request.method == "POST":
         step = request.POST.get("step", "1")
-
         if step == "1":
             return paso_1_verificar_correo(request)
         elif step == "2":
             return paso_2_nueva_contrasena(request)
 
-    # GET request - mostrar formulario inicial
     contexto = {"step": 1}
 
-    # Precargar datos si es primer ingreso
-    if primer_ingreso and email_precargado and rol_precargado:
+    if primer_ingreso_flag and email_precargado:
         contexto["email"] = email_precargado
-        contexto["rol"] = rol_precargado
         contexto["primer_ingreso"] = True
 
     return render(request, "seguridad/recuperar_contraseña.html", contexto)
 
 
 def paso_1_verificar_correo(request):
-    """Maneja el paso 1: verificación de correo y rol"""
-    email = request.POST.get("email", "").strip().lower()
-    rol = request.POST.get("rol", "")
+    """
+    Paso 1: verificación de correo.
+    """
+    email = (request.POST.get("email") or "").strip().lower()
+    primer_ingreso_flag = request.POST.get("primer_ingreso") == "1"
 
-    # Validaciones básicas
-    if not email or not rol:
+    if not email:
         return render(
             request,
             "seguridad/recuperar_contraseña.html",
             {
                 "step": 1,
                 "email": email,
-                "rol": rol,
-                "error": "Por favor, complete todos los campos.",
+                "primer_ingreso": primer_ingreso_flag,
+                "error": "Por favor, complete el correo electrónico.",
             },
         )
 
     try:
-        # Buscar usuario por email y verificar que esté activo
-        usuario = Usuarios.objects.get(email=email, estado="activo")
-
-        # Convertir rol a entero para comparación
-        rol_id = int(rol)
-
-        # Verificar que el rol coincida (comparar con rol_id)
-        if usuario.rol_id == rol_id:
-            # Correo y rol válidos, pasar al paso 2
-            return render(
-                request,
-                "seguridad/recuperar_contraseña.html",
-                {
-                    "step": 2,
-                    "email": email,
-                    "rol": rol,
-                },
+        
+        usuario = (
+            Usuarios.objects
+            .select_related("rol")
+            .filter(
+                email=email,
+                estado="activo",
+                rol__nombre__in=["administrador", "bibliotecario"],
             )
-        else:
-            # Error: rol incorrecto
+            .first()
+        )
+
+        if not usuario:
             return render(
                 request,
                 "seguridad/recuperar_contraseña.html",
                 {
                     "step": 1,
                     "email": email,
-                    "rol": rol,
-                    "error": "El rol seleccionado no coincide con su cuenta.",
+                    "primer_ingreso": primer_ingreso_flag,
+                    "error": "No se encontró un empleado activo con ese correo.",
                 },
             )
 
-    except Usuarios.DoesNotExist:
-        # Error: usuario no encontrado o inactivo
+        # Correo válido → pasar a paso 2
         return render(
             request,
             "seguridad/recuperar_contraseña.html",
             {
-                "step": 1,
+                "step": 2,
                 "email": email,
-                "rol": rol,
-                "error": "El correo electrónico no existe o la cuenta no está activa.",
+                "primer_ingreso": primer_ingreso_flag,
             },
         )
-    except ValueError:
-        # Error: rol no es un número válido
+
+    except Exception:
         return render(
             request,
             "seguridad/recuperar_contraseña.html",
             {
                 "step": 1,
                 "email": email,
-                "rol": rol,
-                "error": "Rol seleccionado no válido.",
-            },
-        )
-    except Exception as e:
-        # Error inesperado
-        return render(
-            request,
-            "seguridad/recuperar_contraseña.html",
-            {
-                "step": 1,
-                "email": email,
-                "rol": rol,
+                "primer_ingreso": primer_ingreso_flag,
                 "error": "Error en el sistema. Por favor, intente más tarde.",
             },
         )
 
 
 def paso_2_nueva_contrasena(request):
-    """Maneja el paso 2: establecer nueva contraseña"""
-    email = request.POST.get("email", "")
-    rol = request.POST.get("rol", "")
+    """
+    Paso 2: establecer nueva contraseña.
+    """
+    email = (request.POST.get("email") or "").strip().lower()
     new_password = request.POST.get("new_password", "")
     confirm_password = request.POST.get("confirm_password", "")
+    primer_ingreso_flag = request.POST.get("primer_ingreso") == "1"
 
-    # Validar que las contraseñas coincidan
+    # Validar igualdad
     if new_password != confirm_password:
         return render(
             request,
@@ -1013,12 +1003,12 @@ def paso_2_nueva_contrasena(request):
             {
                 "step": 2,
                 "email": email,
-                "rol": rol,
+                "primer_ingreso": primer_ingreso_flag,
                 "error": "Las contraseñas no coinciden.",
             },
         )
 
-    # Validar fortaleza de la contraseña
+    # Validar fortaleza
     if not validar_fortaleza_contrasena(new_password):
         return render(
             request,
@@ -1026,76 +1016,79 @@ def paso_2_nueva_contrasena(request):
             {
                 "step": 2,
                 "email": email,
-                "rol": rol,
-                "error": "La contraseña debe tener al menos 8 caracteres, incluir una letra mayúscula, una minúscula, un número y un carácter especial.",
+                "primer_ingreso": primer_ingreso_flag,
+                "error": (
+                    "La contraseña debe tener al menos 8 caracteres, incluir una letra "
+                    "mayúscula, una minúscula, un número y un carácter especial."
+                ),
             },
         )
 
     try:
-        # Convertir rol a entero
-        rol_id = int(rol)
+        # Buscar empleado activo por correo (administrador / bibliotecario)
+        usuario = (
+            Usuarios.objects
+            .select_related("rol")
+            .filter(
+                email=email,
+                estado="activo",
+                rol__nombre__in=["administrador", "bibliotecario"],
+            )
+            .first()
+        )
 
-        # Buscar y actualizar el usuario
-        usuario = Usuarios.objects.get(email=email, rol_id=rol_id, estado="activo")
+        if not usuario:
+            
+            return render(
+                request,
+                "seguridad/recuperar_contraseña.html",
+                {
+                    "step": 1,
+                    "error": "Error en la recuperación. Por favor, inicie el proceso nuevamente.",
+                },
+            )
 
-        # Hashear y guardar la nueva contraseña
         usuario.clave = make_password(new_password)
 
-        # **SI ES PRIMER INGRESO: marcar como False**
-        if request.session.get("primer_ingreso") or request.GET.get(
-            "primer_ingreso"
-        ):
+        # Si era primer ingreso → se marca como ya no primer ingreso
+        if primer_ingreso_flag or request.session.get("primer_ingreso"):
             usuario.primer_ingreso = False
 
         usuario.save()
 
-        # Limpiar sesión de primer ingreso
+        # Limpiar flag de primer ingreso de la sesión
         if "primer_ingreso" in request.session:
             del request.session["primer_ingreso"]
 
-        # Pasar al paso 3 (éxito)
+        # Paso 3: éxito
         contexto = {"step": 3}
-
-        # Si era primer ingreso, mostrar mensaje especial
-        if request.GET.get("primer_ingreso"):
+        if primer_ingreso_flag:
             contexto[
                 "mensaje_especial"
             ] = "¡Contraseña establecida! Ahora puedes acceder al sistema."
 
         return render(request, "seguridad/recuperar_contraseña.html", contexto)
 
-    except Usuarios.DoesNotExist:
-        # Error: usuario no encontrado (posiblemente modificado entre pasos)
-        return render(
-            request,
-            "seguridad/recuperar_contraseña.html",
-            {
-                "step": 1,
-                "error": "Error en la recuperación. Por favor, inicie el proceso nuevamente.",
-            },
-        )
-    except ValueError:
-        # Error: rol no es un número válido
-        return render(
-            request,
-            "seguridad/recuperar_contraseña.html",
-            {
-                "step": 2,
-                "email": email,
-                "rol": rol,
-                "error": "Rol seleccionado no válido.",
-            },
-        )
     except DatabaseError:
-        # Error de base de datos
         return render(
             request,
             "seguridad/recuperar_contraseña.html",
             {
                 "step": 2,
                 "email": email,
-                "rol": rol,
+                "primer_ingreso": primer_ingreso_flag,
                 "error": "Error al guardar la nueva contraseña. Por favor, intente nuevamente.",
+            },
+        )
+    except Exception:
+        return render(
+            request,
+            "seguridad/recuperar_contraseña.html",
+            {
+                "step": 2,
+                "email": email,
+                "primer_ingreso": primer_ingreso_flag,
+                "error": "Error inesperado. Intente nuevamente.",
             },
         )
 
@@ -1119,3 +1112,436 @@ def validar_fortaleza_contrasena(password):
         and tiene_numero
         and tiene_especial
     )
+
+################################################################
+####----------------------GESTION DE COMPRAS ------------------
+################################################################
+
+
+def gestion_proveedores(request):
+    # Verificar sesión
+    try:
+        usuario_actual = Usuarios.objects.get(id=request.session.get("id_usuario"))
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    query = (request.GET.get("q") or "").strip()
+
+    proveedores_qs = Proveedores.objects.all().order_by("nombre_comercial")
+
+    #--opciones de busqueda
+
+    if query:
+        proveedores_qs = proveedores_qs.filter(
+            Q(nombre_comercial__icontains=query) |
+            Q(rtn__icontains=query)
+        )
+
+        #--agregar nuevo proveedor
+
+    if request.method == "POST":
+        if "agregar_proveedor" in request.POST:
+            nombre_comercial = (request.POST.get("nombre_comercial") or "").strip()
+            rtn = (request.POST.get("rtn") or "").strip()
+            direccion = (request.POST.get("direccion") or "").strip()
+            telefono = (request.POST.get("telefono") or "").strip()
+            correo_contacto = (request.POST.get("correo_contacto") or "").strip()
+            suministro = (request.POST.get("suministro") or "").strip()
+            estado = (request.POST.get("estado") or "").strip() or "activo"
+
+            # Validaciones 
+            if not nombre_comercial:
+                messages.error(request, "El nombre comercial es obligatorio.")
+                return redirect("gestion_proveedores")
+
+            if not rtn:
+                messages.error(request, "El RTN es obligatorio.")
+                return redirect("gestion_proveedores")
+
+            if not re.fullmatch(r"\d{14}", rtn):
+                messages.error(request, "El RTN debe contener exactamente 14 dígitos numéricos.")
+                return redirect("gestion_proveedores")
+
+            if telefono:
+                if not re.fullmatch(r"[2389]\d{7}", telefono):
+                    messages.error(
+                        request,
+                        "El teléfono debe tener 8 dígitos y comenzar con 2, 3, 8 o 9."
+                    )
+                    return redirect("gestion_proveedores")
+
+            # Validar RTN único
+            if Proveedores.objects.filter(rtn=rtn).exists():
+                messages.error(request, "Ya existe un proveedor con ese RTN.")
+                return redirect("gestion_proveedores")
+
+            Proveedores.objects.create(
+                nombre_comercial=nombre_comercial,
+                rtn=rtn,
+                direccion=direccion or None,
+                telefono=telefono or None,
+                correo_contacto=correo_contacto or None,
+                suministro=suministro or None,
+                estado=estado,
+            )
+
+            messages.success(request, "Proveedor agregado correctamente.")
+            return redirect("gestion_proveedores")
+
+        if "editar_proveedor" in request.POST:
+            proveedor_id = request.POST.get("proveedor_id")
+            proveedor = get_object_or_404(Proveedores, id=proveedor_id)
+
+            nombre_comercial = (request.POST.get("nombre_comercial") or "").strip()
+            rtn = (request.POST.get("rtn") or "").strip()
+            direccion = (request.POST.get("direccion") or "").strip()
+            telefono = (request.POST.get("telefono") or "").strip()
+            correo_contacto = (request.POST.get("correo_contacto") or "").strip()
+            suministro = (request.POST.get("suministro") or "").strip()
+            estado = (request.POST.get("estado") or "").strip() or "activo"
+
+            #Validaciones
+
+            if not nombre_comercial:
+                messages.error(request, "El nombre comercial es obligatorio.")
+                return redirect("gestion_proveedores")
+
+            if not rtn:
+                messages.error(request, "El RTN es obligatorio.")
+                return redirect("gestion_proveedores")
+
+            if not re.fullmatch(r"\d{14}", rtn):
+                messages.error(request, "El RTN debe contener exactamente 14 dígitos numéricos.")
+                return redirect("gestion_proveedores")
+
+            if telefono:
+                if not re.fullmatch(r"[2389]\d{7}", telefono):
+                    messages.error(
+                        request,
+                        "El teléfono debe tener 8 dígitos y comenzar con 2, 3, 8 o 9."
+                    )
+                    return redirect("gestion_proveedores")
+
+            if Proveedores.objects.filter(rtn=rtn).exclude(id=proveedor.id).exists():
+                messages.error(request, "Ya existe otro proveedor con ese RTN.")
+                return redirect("gestion_proveedores")
+
+            proveedor.nombre_comercial = nombre_comercial
+            proveedor.rtn = rtn
+            proveedor.direccion = direccion or None
+            proveedor.telefono = telefono or None
+            proveedor.correo_contacto = correo_contacto or None
+            proveedor.suministro = suministro or None
+            proveedor.estado = estado
+            proveedor.save()
+
+            messages.success(request, "Proveedor actualizado correctamente.")
+            return redirect("gestion_proveedores")
+
+
+    paginator = Paginator(proveedores_qs, 10)
+    page_number = request.GET.get("page")
+    proveedores = paginator.get_page(page_number)
+
+    context = {
+        "proveedores": proveedores,
+        "query": query,
+        "usuario_actual": usuario_actual,
+    }
+    return render(request, "seguridad/proveedores.html", context)
+
+
+def gestion_compras(request):
+    # Verificar sesión
+    try:
+        usuario_actual = Usuarios.objects.get(id=request.session.get("id_usuario"))
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    query = (request.GET.get("q") or "").strip()
+    fecha_desde = (request.GET.get("fecha_desde") or "").strip()
+    fecha_hasta = (request.GET.get("fecha_hasta") or "").strip()
+
+    # Base queryset (ya con proveedor, usuario y detalles)
+    compras_qs = (
+        Compras.objects
+        .select_related("proveedor", "usuario")
+        .prefetch_related("detalles__libro")
+        .all()
+        .order_by("-fecha", "-id")
+    )
+
+    # Filtros de búsqueda
+    if query:
+        compras_qs = compras_qs.filter(
+            Q(proveedor__nombre_comercial__icontains=query) |
+            Q(proveedor__rtn__icontains=query) |
+            Q(numero_factura__icontains=query)
+        )
+
+    if fecha_desde:
+        compras_qs = compras_qs.filter(fecha__date__gte=fecha_desde)
+
+    if fecha_hasta:
+        compras_qs = compras_qs.filter(fecha__date__lte=fecha_hasta)
+
+    # ------------------------------
+    # POST: crear o editar una compra
+    # ------------------------------
+    if request.method == "POST":
+
+        # ==========================
+        # ➕ AGREGAR COMPRA
+        # ==========================
+        if "agregar_compra" in request.POST:
+            proveedor_nombre = (request.POST.get("proveedor_nombre") or "").strip()
+            metodo_pago = (request.POST.get("metodo_pago") or "").strip()
+
+            libro_ids = request.POST.getlist("libro_id[]")
+            cantidades = request.POST.getlist("cantidad[]")
+            costos = request.POST.getlist("costo_unitario[]")
+
+            # ✅ Validar proveedor (solo activos)
+            if not proveedor_nombre:
+                messages.error(request, "Debe seleccionar un proveedor.")
+                return redirect("gestion_compras")
+
+            try:
+                proveedor = Proveedores.objects.get(
+                    nombre_comercial=proveedor_nombre,
+                    estado="activo"
+                )
+            except Proveedores.DoesNotExist:
+                messages.error(
+                    request,
+                    "El proveedor indicado no existe o no está activo."
+                )
+                return redirect("gestion_compras")
+            except Proveedores.MultipleObjectsReturned:
+                messages.error(
+                    request,
+                    "Existe más de un proveedor con ese nombre. "
+                    "Use nombres únicos o edite los proveedores."
+                )
+                return redirect("gestion_compras")
+
+            # Validar método de pago
+            if not metodo_pago:
+                messages.error(request, "Debe seleccionar un método de pago.")
+                return redirect("gestion_compras")
+
+            # Validar ítems
+            items = []
+            for idx, libro_id in enumerate(libro_ids):
+                libro_id = (libro_id or "").strip()
+                cant = (cantidades[idx] if idx < len(cantidades) else "").strip()
+                costo = (costos[idx] if idx < len(costos) else "").strip()
+
+                # Fila completamente vacía → la ignoramos
+                if not (libro_id or cant or costo):
+                    continue
+
+                if not (libro_id and cant and costo):
+                    messages.error(
+                        request,
+                        "Todas las filas deben tener libro, cantidad y costo unitario. "
+                        "Elimine las filas que no vaya a usar."
+                    )
+                    return redirect("gestion_compras")
+
+                libro = get_object_or_404(Libros, id=libro_id)
+
+                try:
+                    cant_int = int(cant)
+                    costo_dec = float(costo)
+                except ValueError:
+                    messages.error(request, "Cantidad y costo unitario deben ser numéricos.")
+                    return redirect("gestion_compras")
+
+                if cant_int <= 0:
+                    messages.error(request, "La cantidad debe ser mayor que cero.")
+                    return redirect("gestion_compras")
+
+                if costo_dec <= 0:
+                    messages.error(request, "El costo unitario debe ser mayor que cero.")
+                    return redirect("gestion_compras")
+
+                subtotal = cant_int * costo_dec
+                items.append({
+                    "libro": libro,
+                    "cantidad": cant_int,
+                    "costo_unitario": costo_dec,
+                    "subtotal": subtotal,
+                })
+
+            if not items:
+                messages.error(request, "Debe agregar al menos un libro a la compra.")
+                return redirect("gestion_compras")
+
+            # Número de factura: SIEMPRE automático
+            ultima = Compras.objects.order_by("-id").first()
+            siguiente = (ultima.id if ultima else 0) + 1
+            numero_factura = f"FAC-{siguiente:06d}"
+
+            total_compra = sum(i["subtotal"] for i in items)
+
+            # Guardar SOLO fecha (sin hora)
+            fecha_hoy = timezone.now().date()
+
+            try:
+                compra = Compras.objects.create(
+                    proveedor=proveedor,
+                    usuario=usuario_actual,
+                    numero_factura=numero_factura,
+                    fecha=fecha_hoy,
+                    total=total_compra,
+                    metodo_pago=metodo_pago,
+                )
+            except Exception:
+                messages.error(
+                    request,
+                    "Error al registrar la compra. Verifique que los datos sean correctos."
+                )
+                return redirect("gestion_compras")
+
+            # Crear detalles y actualizar stock
+            for item in items:
+                DetalleCompras.objects.create(
+                    compra=compra,
+                    libro=item["libro"],
+                    cantidad=item["cantidad"],
+                    costo_unitario=item["costo_unitario"],
+                    subtotal=item["subtotal"],
+                )
+
+                libro = item["libro"]
+                libro.stock_total = (libro.stock_total or 0) + item["cantidad"]
+                libro.save()
+
+            # Bitácora
+            Bitacora.objects.create(
+                usuario=usuario_actual,
+                accion=(
+                    f"REGISTRÓ COMPRA id={compra.id} "
+                    f"factura={compra.numero_factura} "
+                    f"proveedor={compra.proveedor.nombre_comercial} "
+                    f"total={compra.total}"
+                ),
+                fecha=timezone.now(),
+            )
+
+            messages.success(request, "La compra se registró correctamente.")
+            return redirect("gestion_compras")
+
+        # ==========================
+        # ✏️ EDITAR COMPRA
+        # ==========================
+        if "editar_compra" in request.POST:
+            compra_id = request.POST.get("compra_id")
+            proveedor_nombre = (request.POST.get("proveedor_nombre") or "").strip()
+            metodo_pago = (request.POST.get("metodo_pago") or "").strip()
+
+            compra = get_object_or_404(Compras, id=compra_id)
+
+            if not proveedor_nombre:
+                messages.error(request, "Debe seleccionar un proveedor.")
+                return redirect("gestion_compras")
+
+            try:
+                proveedor = Proveedores.objects.get(
+                    nombre_comercial=proveedor_nombre,
+                    estado="activo"
+                )
+            except Proveedores.DoesNotExist:
+                messages.error(
+                    request,
+                    "El proveedor indicado no existe o no está activo."
+                )
+                return redirect("gestion_compras")
+            except Proveedores.MultipleObjectsReturned:
+                messages.error(
+                    request,
+                    "Existe más de un proveedor con ese nombre. "
+                    "Use nombres únicos o edite los proveedores."
+                )
+                return redirect("gestion_compras")
+
+            if not metodo_pago:
+                messages.error(request, "Debe seleccionar un método de pago.")
+                return redirect("gestion_compras")
+
+            compra.proveedor = proveedor
+            compra.metodo_pago = metodo_pago
+            compra.save()
+
+            Bitacora.objects.create(
+                usuario=usuario_actual,
+                accion=(
+                    f"EDITÓ COMPRA id={compra.id} "
+                    f"factura={compra.numero_factura} "
+                    f"proveedor={compra.proveedor.nombre_comercial} "
+                    f"total={compra.total}"
+                ),
+                fecha=timezone.now(),
+            )
+
+            messages.success(request, "La compra se actualizó correctamente.")
+            return redirect("gestion_compras")
+
+    # Paginación
+    paginator = Paginator(compras_qs, 10)
+    page_number = request.GET.get("page")
+    compras = paginator.get_page(page_number)
+
+    # 👇 Solo proveedores ACTIVOS para los selects del HTML
+    proveedores = Proveedores.objects.filter(estado="activo").order_by("nombre_comercial")
+    libros = Libros.objects.all().order_by("titulo")
+
+    context = {
+        "compras": compras,
+        "query": query,
+        "fecha_desde": fecha_desde,
+        "fecha_hasta": fecha_hasta,
+        "proveedores": proveedores,
+        "libros": libros,
+        "usuario_actual": usuario_actual,
+    }
+    return render(request, "seguridad/gestion_compras.html", context)
+#------------comprobante_compra_digital---------------------------
+from django.http import HttpResponse
+from django.template.loader import render_to_string
+from xhtml2pdf import pisa
+import io
+
+# ...
+
+def comprobante_compra_pdf(request, compra_id):
+    # Carga la compra con proveedor, usuario y detalles de libros
+    compra = get_object_or_404(
+        Compras.objects
+        .select_related("proveedor", "usuario")
+        .prefetch_related("detalles__libro"),
+        id=compra_id,
+    )
+
+    # Renderizar el HTML del comprobante
+    html = render_to_string("seguridad/comprobante_compra.html", {
+        "compra": compra,
+    })
+
+    # Preparar respuesta HTTP como PDF descargable
+    response = HttpResponse(content_type="application/pdf")
+    filename = f"comprobante_{compra.numero_factura}.pdf"
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+
+    # Generar PDF desde el HTML
+    pisa_status = pisa.CreatePDF(
+        src=html,
+        dest=response,
+        encoding="utf-8",
+    )
+
+    if pisa_status.err:
+        return HttpResponse("Ocurrió un error al generar el PDF.", status=500)
+
+    return response

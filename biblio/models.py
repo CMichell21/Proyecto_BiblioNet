@@ -154,4 +154,73 @@ class CatalogoPublico(models.Model):
         managed = False
         db_table = 'catalogo_publico'
 
+class Proveedores(models.Model):
+    id = models.AutoField(primary_key=True)
+    nombre_comercial = models.CharField(max_length=150)
+    rtn = models.CharField(max_length=50, unique=True)
+    direccion = models.CharField(max_length=255, blank=True, null=True)
+    telefono = models.CharField(max_length=50, blank=True, null=True)
+    correo_contacto = models.CharField(max_length=150, blank=True, null=True)
+    suministro = models.CharField(max_length=150, blank=True, null=True)
+    estado = models.CharField(max_length=20, default="activo")
+    fecha_registro = models.DateTimeField(blank=True, null=True)
 
+    class Meta:
+        managed = False
+        db_table = "proveedores"
+
+    def __str__(self):
+        return self.nombre_comercial
+
+
+class Compras(models.Model):
+    id = models.AutoField(primary_key=True)
+    proveedor = models.ForeignKey(
+        Proveedores,
+        on_delete=models.PROTECT,
+        related_name="compras",
+        db_column="proveedor_id",
+    )
+    usuario = models.ForeignKey(
+        "Usuarios",           # asumiendo que tu modelo Usuarios está en este app
+        on_delete=models.PROTECT,
+        related_name="compras_registradas",
+        db_column="usuario_id",
+    )
+    numero_factura = models.CharField(max_length=50, unique=True)
+    fecha = models.DateTimeField(blank=True, null=True)
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    metodo_pago = models.CharField(max_length=50, blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = "compras"
+
+    def __str__(self):
+        return f"{self.numero_factura} - {self.proveedor.nombre_comercial}"
+
+
+class DetalleCompras(models.Model):
+    id = models.AutoField(primary_key=True)
+    compra = models.ForeignKey(
+        Compras,
+        on_delete=models.CASCADE,
+        related_name="detalles",
+        db_column="compra_id",
+    )
+    libro = models.ForeignKey(
+        "Libros",
+        on_delete=models.PROTECT,
+        related_name="detalles_compra",
+        db_column="libro_id",
+    )
+    cantidad = models.IntegerField()
+    costo_unitario = models.DecimalField(max_digits=10, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        managed = False
+        db_table = "detalle_compras"
+
+    def __str__(self):
+        return f"{self.libro.titulo} x {self.cantidad}"

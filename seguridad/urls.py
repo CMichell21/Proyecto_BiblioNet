@@ -16,4 +16,7 @@ urlpatterns = [
     path("prestamos/<int:prestamo_id>/renovar/", views.renovar_prestamo, name="renovar_prestamo"),
     path("prestamos/<int:prestamo_id>/devolver/", views.devolver_prestamo, name="devolver_prestamo"),
     path('empleados/recuperar-contrasena/', views.recuperar_contrasena_empleado, name='recuperar_contrasena_empleado'),
+    path("compras/gestion/", views.gestion_compras, name="gestion_compras"),
+    path("proveedores/", views.gestion_proveedores, name="gestion_proveedores"),
+    path("compras/comprobante/<int:compra_id>/", views.comprobante_compra_pdf,name="comprobante_compra_pdf"),
 ]
