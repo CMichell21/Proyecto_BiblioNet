@@ -1,11 +1,4 @@
-﻿# This is an auto-generated Django model module.
-# You'll have to do the following manually to clean this up:
-#   * Rearrange models' order
-#   * Make sure each model has one field with primary_key=True
-#   * Make sure each ForeignKey and OneToOneField has `on_delete` set to the desired behavior
-#   * Remove `managed = False` lines if you wish to allow Django to create, modify, and delete the table
-# Feel free to rename the models, but don't rename db_table values or field names.
-from django.db import models
+﻿from django.db import models
 
 
 class Roles(models.Model):
@@ -13,7 +6,6 @@ class Roles(models.Model):
     descripcion = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
-        managed = False
         db_table = 'roles'
 
 
@@ -23,7 +15,6 @@ class Permisos(models.Model):
     descripcion = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
-        managed = False
         db_table = 'permisos'
 
 
@@ -36,8 +27,8 @@ class RolPermiso(models.Model):
         return f"{self.rol} - {self.permiso}"
 
     class Meta:
-        managed = False
         db_table = 'rol_permiso'
+
 
 class Usuarios(models.Model):
     rol = models.ForeignKey(Roles, models.DO_NOTHING)
@@ -46,13 +37,21 @@ class Usuarios(models.Model):
     email = models.CharField(unique=True, max_length=150)
     clave = models.CharField(max_length=255)
     estado = models.CharField(max_length=20, blank=True, null=True)
-    fecha_creacion = models.DateTimeField( blank=True, null=True)
+    fecha_creacion = models.DateTimeField(blank=True, null=True)
+
+    # 🔹 Opcionales, tomados de la versión de tu compañera
     primer_ingreso = models.BooleanField(default=True)
-    foto_perfil = models.ImageField(upload_to="perfiles/", blank=True, null=True)
+    foto_perfil = models.ImageField(
+        upload_to="perfiles/",
+        blank=True,
+        null=True
+    )
 
     class Meta:
-        managed = False
         db_table = 'usuarios'
+
+    def __str__(self):
+        return f"{self.nombre} {self.apellido} ({self.email})"
 
 
 class Bitacora(models.Model):
@@ -61,19 +60,33 @@ class Bitacora(models.Model):
     fecha = models.DateTimeField(blank=True, null=True)
 
     class Meta:
-        managed = False
         db_table = 'bitacora'
 
 
 class Clientes(models.Model):
-    usuario = models.ForeignKey(Usuarios, models.DO_NOTHING, blank=True, null=True)
-    dni = models.CharField( max_length=20)
+    # Mantenemos tu relación 1 a 1 con Usuarios
+    usuario = models.OneToOneField(Usuarios, on_delete=models.CASCADE)
+    dni = models.CharField(max_length=20, unique=True)
     direccion = models.CharField(max_length=255, blank=True, null=True)
+    estado = models.CharField(max_length=20, default="activo")
+
+    # 🔹 Campo extra tomado de la versión de tu compañera
     telefono = models.CharField(max_length=20, blank=True, null=True)
-    estado = models.CharField(max_length=20, blank=True, null=True)
+
+    # 🔹 Campos de bloqueo que ya tenías
+    bloqueado = models.BooleanField(default=False)
+    motivo_bloqueo = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="Ej: Mora en préstamos, incumplimiento de normas, etc."
+    )
+    fecha_bloqueo = models.DateTimeField(blank=True, null=True)
+
+    def __str__(self):
+        return f"{self.usuario.nombre} {self.usuario.apellido} ({self.dni})"
 
     class Meta:
-        managed = False
         db_table = 'clientes'
 
 
@@ -83,14 +96,30 @@ class Libros(models.Model):
     autor = models.CharField(max_length=255)
     categoria = models.CharField(max_length=100, blank=True, null=True)
     editorial = models.CharField(max_length=150, blank=True, null=True)
-    anio_publicacion = models.TextField(blank=True, null=True)  # This field type is a guess.
+    anio_publicacion = models.TextField(blank=True, null=True)
     stock_total = models.IntegerField(blank=True, null=True)
     portada = models.ImageField(upload_to='portadas/', blank=True, null=True)
     fecha_registro = models.DateTimeField(blank=True, null=True)
 
+    # 🔹 Campos que añadimos para ventas
+    precio_venta = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        help_text="Precio de venta al público (Lempiras)."
+    )
+    impuesto_porcentaje = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=15.00,  # ISV por defecto
+        help_text="Porcentaje de impuesto aplicado a este libro."
+    )
+
     class Meta:
-        managed = False
         db_table = 'libros'
+
+    def __str__(self):
+        return f"{self.titulo} ({self.isbn})"
 
 
 class Ejemplares(models.Model):
@@ -100,8 +129,10 @@ class Ejemplares(models.Model):
     estado = models.CharField(max_length=20, blank=True, null=True)
 
     class Meta:
-        managed = False
         db_table = 'ejemplares'
+
+    def __str__(self):
+        return f"{self.codigo_interno} - {self.libro.titulo}"
 
 
 class ReglasPrestamo(models.Model):
@@ -112,8 +143,10 @@ class ReglasPrestamo(models.Model):
     fecha_actualizacion = models.DateTimeField(blank=True, null=True)
 
     class Meta:
-        managed = False
         db_table = 'reglas_prestamo'
+
+    def __str__(self):
+        return f"Plazo: {self.plazo_dias} días - Límite: {self.limite_prestamos}"
 
 
 class Prestamos(models.Model):
@@ -125,8 +158,10 @@ class Prestamos(models.Model):
     estado = models.CharField(max_length=20, blank=True, null=True)
 
     class Meta:
-        managed = False
         db_table = 'prestamos'
+
+    def __str__(self):
+        return f"Préstamo #{self.id} - {self.ejemplar} - {self.cliente}"
 
 
 class Reservas(models.Model):
@@ -137,8 +172,11 @@ class Reservas(models.Model):
     estado = models.CharField(max_length=20, blank=True, null=True)
 
     class Meta:
-        managed = False
         db_table = 'reservas'
+
+    def __str__(self):
+        return f"Reserva #{self.id} - {self.libro} - {self.cliente}"
+
 
 class CatalogoPublico(models.Model):
     id_libro = models.IntegerField(primary_key=True)
@@ -146,15 +184,20 @@ class CatalogoPublico(models.Model):
     autor = models.CharField(max_length=255)
     categoria = models.CharField(max_length=100, null=True, blank=True)
     editorial = models.CharField(max_length=150, null=True, blank=True)
-    anio_publicacion = models.IntegerField(null=True, blank=True)  # YEAR en MySQL
+    anio_publicacion = models.IntegerField(null=True, blank=True)
     portada = models.CharField(max_length=255, null=True, blank=True)
     total_ejemplares = models.IntegerField()
     disponibles = models.IntegerField()
 
     class Meta:
-        managed = False
         db_table = 'catalogo_publico'
+        managed = False  # VIEW en la BD
 
+    def __str__(self):
+        return self.titulo
+
+
+# 🔹 NUEVO: Proveedores (de la versión de tu compañera)
 class Proveedores(models.Model):
     id = models.AutoField(primary_key=True)
     nombre_comercial = models.CharField(max_length=150)
@@ -167,13 +210,13 @@ class Proveedores(models.Model):
     fecha_registro = models.DateTimeField(blank=True, null=True)
 
     class Meta:
-        managed = False
         db_table = "proveedores"
 
     def __str__(self):
         return self.nombre_comercial
 
 
+# 🔹 NUEVO: Compras (cabecera)
 class Compras(models.Model):
     id = models.AutoField(primary_key=True)
     proveedor = models.ForeignKey(
@@ -183,7 +226,7 @@ class Compras(models.Model):
         db_column="proveedor_id",
     )
     usuario = models.ForeignKey(
-        "Usuarios",           # asumiendo que tu modelo Usuarios está en este app
+        Usuarios,
         on_delete=models.PROTECT,
         related_name="compras_registradas",
         db_column="usuario_id",
@@ -194,13 +237,13 @@ class Compras(models.Model):
     metodo_pago = models.CharField(max_length=50, blank=True, null=True)
 
     class Meta:
-        managed = False
         db_table = "compras"
 
     def __str__(self):
         return f"{self.numero_factura} - {self.proveedor.nombre_comercial}"
 
 
+# 🔹 NUEVO: DetalleCompras
 class DetalleCompras(models.Model):
     id = models.AutoField(primary_key=True)
     compra = models.ForeignKey(
@@ -210,7 +253,7 @@ class DetalleCompras(models.Model):
         db_column="compra_id",
     )
     libro = models.ForeignKey(
-        "Libros",
+        Libros,
         on_delete=models.PROTECT,
         related_name="detalles_compra",
         db_column="libro_id",
@@ -220,8 +263,81 @@ class DetalleCompras(models.Model):
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)
 
     class Meta:
-        managed = False
         db_table = "detalle_compras"
 
     def __str__(self):
         return f"{self.libro.titulo} x {self.cantidad}"
+
+
+class Ventas(models.Model):
+    cliente = models.ForeignKey(Clientes, models.DO_NOTHING)
+    vendedor = models.ForeignKey(Usuarios, models.DO_NOTHING)
+    fecha_venta = models.DateTimeField(auto_now_add=True)
+    metodo_pago = models.CharField(max_length=50)  # Efectivo, Tarjeta, etc.
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2)
+    impuesto = models.DecimalField(max_digits=10, decimal_places=2)
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    estado = models.CharField(
+        max_length=20,
+        default="pagada",  # pendiente, pagada, anulada
+        blank=True,
+        null=True,
+    )
+
+    class Meta:
+        db_table = 'ventas'
+
+    def __str__(self):
+        return f"Venta #{self.id} - {self.cliente} - {self.total}"
+
+
+class DetalleVenta(models.Model):
+    venta = models.ForeignKey(
+        Ventas,
+        models.DO_NOTHING,
+        related_name="detalles"
+    )
+    libro = models.ForeignKey(Libros, models.DO_NOTHING)
+    cantidad = models.IntegerField(default=1)
+    precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
+    impuesto_unitario = models.DecimalField(max_digits=10, decimal_places=2)
+    total_linea = models.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        db_table = 'detalle_ventas'
+
+    def __str__(self):
+        return f"DetalleVenta #{self.id} - Venta {self.venta_id}"
+
+
+class SolicitudVenta(models.Model):
+    ORIGEN_CHOICES = (
+        ("reserva", "Desde reserva"),
+        ("detalle", "Desde detalle"),
+    )
+
+    cliente = models.ForeignKey(Clientes, models.DO_NOTHING)
+    libro = models.ForeignKey(Libros, models.DO_NOTHING)
+    reserva = models.ForeignKey(
+        Reservas,
+        models.DO_NOTHING,
+        blank=True,
+        null=True,
+    )
+    cantidad = models.IntegerField(default=1)
+    estado = models.CharField(
+        max_length=20,
+        default="pendiente",  # pendiente, atendida, cancelada
+    )
+    origen = models.CharField(
+        max_length=20,
+        choices=ORIGEN_CHOICES,
+        default="detalle",
+    )
+    fecha_solicitud = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'solicitudes_venta'
+
+    def __str__(self):
+        return f"Solicitud #{self.id} - {self.cliente} - {self.libro}"
