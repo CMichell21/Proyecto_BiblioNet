@@ -13,8 +13,8 @@ def actualizar_bloqueo_por_mora(cliente: Clientes) -> bool:
 
     tiene_prestamos_en_mora = Prestamos.objects.filter(
         cliente=cliente,
-        fecha_devolucion__isnull=True,  # aún no devuelto
-        fecha_fin__lt=hoy,              # fecha fin ya pasó -> mora
+        fecha_devolucion__isnull=True, 
+        fecha_fin__lt=hoy,             
     ).exists()
 
     if tiene_prestamos_en_mora:
@@ -25,11 +25,11 @@ def actualizar_bloqueo_por_mora(cliente: Clientes) -> bool:
             cliente.save(update_fields=["bloqueado", "motivo_bloqueo", "fecha_bloqueo"])
         return True
     else:
-        # Si no tiene mora y el motivo era solo por mora, lo podemos desbloquear automático
+        
         if cliente.bloqueado and cliente.motivo_bloqueo and "mora" in cliente.motivo_bloqueo.lower():
             cliente.bloqueado = False
             cliente.motivo_bloqueo = ""
             cliente.fecha_bloqueo = None
             cliente.save(update_fields=["bloqueado", "motivo_bloqueo", "fecha_bloqueo"])
 
-        return cliente.bloqueado  # puede seguir bloqueado por otro motivo manual
+        return cliente.bloqueado 
