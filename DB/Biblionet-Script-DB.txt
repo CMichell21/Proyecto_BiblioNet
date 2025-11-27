@@ -1,0 +1,186 @@
+CREATE TABLE roles (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(50) UNIQUE NOT NULL,
+    descripcion VARCHAR(255)
+);
+
+CREATE TABLE permisos (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    modulo VARCHAR(100) NOT NULL,
+    accion VARCHAR(100) NOT NULL,
+    descripcion VARCHAR(255)
+);
+
+CREATE TABLE rol_permiso (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    rol_id INT NOT NULL,
+    permiso_id INT NOT NULL,
+    FOREIGN KEY (rol_id) REFERENCES roles(id),
+    FOREIGN KEY (permiso_id) REFERENCES permisos(id)
+);
+
+CREATE TABLE usuarios (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    rol_id INT NOT NULL,
+    nombre VARCHAR(100) NOT NULL,
+    apellido VARCHAR(100) NOT NULL,
+    email VARCHAR(150) UNIQUE NOT NULL,
+    clave VARCHAR(255) NOT NULL,
+    estado VARCHAR(20),
+    fecha_creacion DATETIME,
+    primer_ingreso BOOLEAN DEFAULT TRUE,
+    foto_perfil VARCHAR(255),
+    FOREIGN KEY (rol_id) REFERENCES roles(id)
+);
+
+CREATE TABLE bitacora (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    usuario_id INT,
+    accion VARCHAR(255) NOT NULL,
+    fecha DATETIME,
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+);
+
+CREATE TABLE clientes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    usuario_id INT UNIQUE NOT NULL,
+    dni VARCHAR(20) UNIQUE NOT NULL,
+    direccion VARCHAR(255),
+    estado VARCHAR(20) DEFAULT 'activo',
+    telefono VARCHAR(20),
+    bloqueado BOOLEAN DEFAULT FALSE,
+    motivo_bloqueo VARCHAR(255),
+    fecha_bloqueo DATETIME,
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+);
+
+CREATE TABLE libros (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    isbn VARCHAR(20) UNIQUE NOT NULL,
+    titulo VARCHAR(255) NOT NULL,
+    autor VARCHAR(255) NOT NULL,
+    categoria VARCHAR(100),
+    editorial VARCHAR(150),
+    anio_publicacion TEXT,
+    stock_total INT,
+    portada VARCHAR(255),
+    fecha_registro DATETIME,
+    precio_venta DECIMAL(10,2) DEFAULT 0,
+    impuesto_porcentaje DECIMAL(5,2) DEFAULT 15.00
+);
+
+CREATE TABLE ejemplares (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    libro_id INT NOT NULL,
+    codigo_interno VARCHAR(50) UNIQUE,
+    ubicacion VARCHAR(100),
+    estado VARCHAR(20),
+    FOREIGN KEY (libro_id) REFERENCES libros(id)
+);
+
+CREATE TABLE reglas_prestamo (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    plazo_dias INT NOT NULL,
+    limite_prestamos INT NOT NULL,
+    tarifa_mora_diaria DECIMAL(10,2) NOT NULL,
+    descripcion VARCHAR(255),
+    fecha_actualizacion DATETIME
+);
+
+CREATE TABLE prestamos (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    cliente_id INT NOT NULL,
+    ejemplar_id INT NOT NULL,
+    fecha_inicio DATE NOT NULL,
+    fecha_fin DATE NOT NULL,
+    fecha_devolucion DATE,
+    estado VARCHAR(20),
+    FOREIGN KEY (cliente_id) REFERENCES clientes(id),
+    FOREIGN KEY (ejemplar_id) REFERENCES ejemplares(id)
+);
+
+CREATE TABLE reservas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    cliente_id INT NOT NULL,
+    libro_id INT NOT NULL,
+    fecha_reserva DATETIME,
+    fecha_vencimiento DATETIME,
+    estado VARCHAR(20),
+    FOREIGN KEY (cliente_id) REFERENCES clientes(id),
+    FOREIGN KEY (libro_id) REFERENCES libros(id)
+);
+
+CREATE TABLE proveedores (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nombre_comercial VARCHAR(150) NOT NULL,
+    rtn VARCHAR(50) UNIQUE NOT NULL,
+    direccion VARCHAR(255),
+    telefono VARCHAR(50),
+    correo_contacto VARCHAR(150),
+    suministro VARCHAR(150),
+    estado VARCHAR(20) DEFAULT 'activo',
+    fecha_registro DATETIME
+);
+
+CREATE TABLE compras (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    proveedor_id INT NOT NULL,
+    usuario_id INT NOT NULL,
+    numero_factura VARCHAR(50) UNIQUE NOT NULL,
+    fecha DATETIME,
+    total DECIMAL(10,2) NOT NULL,
+    metodo_pago VARCHAR(50),
+    FOREIGN KEY (proveedor_id) REFERENCES proveedores(id),
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+);
+
+CREATE TABLE detalle_compras (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    compra_id INT NOT NULL,
+    libro_id INT NOT NULL,
+    cantidad INT NOT NULL,
+    costo_unitario DECIMAL(10,2) NOT NULL,
+    subtotal DECIMAL(10,2) NOT NULL,
+    FOREIGN KEY (compra_id) REFERENCES compras(id),
+    FOREIGN KEY (libro_id) REFERENCES libros(id)
+);
+
+CREATE TABLE ventas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    cliente_id INT NOT NULL,
+    vendedor_id INT NOT NULL,
+    fecha_venta DATETIME DEFAULT CURRENT_TIMESTAMP,
+    metodo_pago VARCHAR(50) NOT NULL,
+    subtotal DECIMAL(10,2) NOT NULL,
+    impuesto DECIMAL(10,2) NOT NULL,
+    total DECIMAL(10,2) NOT NULL,
+    estado VARCHAR(20) DEFAULT 'pagada',
+    FOREIGN KEY (cliente_id) REFERENCES clientes(id),
+    FOREIGN KEY (vendedor_id) REFERENCES usuarios(id)
+);
+
+CREATE TABLE detalle_ventas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    venta_id INT NOT NULL,
+    libro_id INT NOT NULL,
+    cantidad INT DEFAULT 1,
+    precio_unitario DECIMAL(10,2) NOT NULL,
+    impuesto_unitario DECIMAL(10,2) NOT NULL,
+    total_linea DECIMAL(10,2) NOT NULL,
+    FOREIGN KEY (venta_id) REFERENCES ventas(id),
+    FOREIGN KEY (libro_id) REFERENCES libros(id)
+);
+
+CREATE TABLE solicitudes_venta (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    cliente_id INT NOT NULL,
+    libro_id INT NOT NULL,
+    reserva_id INT,
+    cantidad INT DEFAULT 1,
+    estado VARCHAR(20) DEFAULT 'pendiente',
+    origen VARCHAR(20) NOT NULL,
+    fecha_solicitud DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (cliente_id) REFERENCES clientes(id),
+    FOREIGN KEY (libro_id) REFERENCES libros(id),
+    FOREIGN KEY (reserva_id) REFERENCES reservas(id)
+);
