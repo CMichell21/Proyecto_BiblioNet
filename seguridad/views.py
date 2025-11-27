@@ -1,5 +1,11 @@
 from functools import wraps
 from datetime import datetime, timedelta
+import random
+import re
+from io import BytesIO
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+from django.db import transaction, DatabaseError
+from django.http import HttpResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.csrf import csrf_protect
 from django.contrib.auth.hashers import check_password, make_password
@@ -7,11 +13,9 @@ from django.contrib.auth import logout as auth_logout
 from django.utils import timezone
 from django.contrib import messages
 from django.core.paginator import Paginator
-from django.db.models import Q
-import random, re
+from django.db.models import Q, Sum
 from django.urls import reverse
-from django.db import DatabaseError
-
+from biblio.utils import actualizar_bloqueo_por_mora
 
 from biblio.models import (
     Usuarios,
@@ -22,22 +26,24 @@ from biblio.models import (
     ReglasPrestamo,
     Clientes,
     Ejemplares,
-    Compras,
+    SolicitudVenta,
+    Ventas,
+    DetalleVenta,
     Proveedores,
-    DetalleCompras
+    Compras,
+    DetalleCompras,
 )
 
 # ---------- Helpers de sesión / roles ----------
+
 def _usuario_autenticado(request):
     return request.session.get("id_usuario") is not None
-
 
 def _obtener_rol_usuario(request):
     return request.session.get("rol_usuario")
 
-
 def requerir_rol(*roles_permitidos):
-    """Redirige a login si no hay sesión o si el rol no está permitido."""
+
     def decorador(vista):
         @wraps(vista)
         def envoltura(request, *args, **kwargs):
@@ -46,22 +52,23 @@ def requerir_rol(*roles_permitidos):
             if _obtener_rol_usuario(request) not in roles_permitidos:
                 return redirect("inicio_sesion")
             return vista(request, *args, **kwargs)
+
         return envoltura
+
     return decorador
 
-
-# ---------- Login / Logout (empleados/admin) ----------
 def _redirigir_segun_rol(rol):
     if rol == "administrador":
         return redirect("panel_administrador")
     else:
         return redirect("panel_bibliotecario")
 
+# ---------- Login / Logout (empleados/admin) ----------
 @csrf_protect
 def iniciar_sesion_empleado(request):
-    # LIMPIAR MENSAJES PREVIOS
+
     storage = messages.get_messages(request)
-    for message in storage:
+    for _ in storage:
         pass
 
     contexto = {"error": None}
@@ -71,29 +78,34 @@ def iniciar_sesion_empleado(request):
         contrasena = request.POST.get("password", "")
         recordar_sesion = request.POST.get("remember", "")
 
-        # Validación básica
         if not correo or not contrasena:
             contexto["error"] = "Completa correo y contraseña."
+            contexto["email"] = correo
             return render(request, "seguridad/login_empleados.html", contexto)
 
         try:
-            # Buscar usuario activo que sea administrador o bibliotecario
-            usuario = Usuarios.objects.select_related("rol").get(
-                email=correo,
-                estado="activo",
-                rol__nombre__in=["administrador", "bibliotecario"],
+            
+            usuario = (
+                Usuarios.objects
+                .select_related("rol")
+                .get(
+                    email=correo,
+                    estado="activo",
+                    rol__nombre__in=["administrador", "bibliotecario"],
+                )
             )
         except Usuarios.DoesNotExist:
             contexto["error"] = "Credenciales incorrectas. Intenta nuevamente."
+            contexto["email"] = correo
             return render(request, "seguridad/login_empleados.html", contexto)
         except Usuarios.MultipleObjectsReturned:
             contexto["error"] = (
                 "Existen múltiples cuentas asociadas a este correo. "
                 "Contacta al administrador del sistema."
             )
+            contexto["email"] = correo
             return render(request, "seguridad/login_empleados.html", contexto)
 
-        # Verificar contraseña (soporta hasheadas y planas viejas)
         contrasena_bd = usuario.clave or ""
         if contrasena_bd.startswith(("pbkdf2_", "argon2$", "bcrypt$")):
             coincide = check_password(contrasena, contrasena_bd)
@@ -102,6 +114,7 @@ def iniciar_sesion_empleado(request):
 
         if not coincide:
             contexto["error"] = "Credenciales incorrectas. Intenta nuevamente."
+            contexto["email"] = correo
             return render(request, "seguridad/login_empleados.html", contexto)
 
         # Login exitoso → guardar datos básicos en sesión
@@ -114,14 +127,16 @@ def iniciar_sesion_empleado(request):
             60 * 60 * 24 * 14 if recordar_sesion == "on" else 0
         )
 
-        # SI ES PRIMER INGRESO Y ES ADMIN/BIBLIOTECARIO → obligar a cambiar contraseña
-        if usuario.primer_ingreso and usuario.rol.nombre in ("administrador", "bibliotecario"):
+        # Si es primer ingreso → obligar a cambiar contraseña
+        if getattr(usuario, "primer_ingreso", False) and usuario.rol.nombre in (
+            "administrador",
+            "bibliotecario",
+        ):
             request.session["primer_ingreso"] = True
             url_recuperar = reverse("recuperar_contrasena_empleado")
-            # Mandamos SOLO el correo + flag de primer ingreso
             return redirect(f"{url_recuperar}?email={usuario.email}&primer_ingreso=1")
 
-        # Si no es primer ingreso → flujo normal según rol
+        # Flujo normal según rol
         if usuario.rol.nombre == "administrador":
             return redirect("panel_administrador")
         else:
@@ -130,23 +145,20 @@ def iniciar_sesion_empleado(request):
     # GET → mostrar formulario
     return render(request, "seguridad/login_empleados.html", contexto)
 
-
 def cerrar_sesion_empleado(request):
-    # Por si en algún momento se usa el sistema de auth de Django
     auth_logout(request)
 
-    # Borrar claves específicas que usamos para empleados
     for key in ["id_usuario", "correo_usuario", "rol_usuario"]:
         if key in request.session:
             del request.session[key]
 
-    # Vaciar por completo la sesión y regenerar la cookie
     request.session.flush()
 
+    messages.success(request, "Sesión de empleado cerrada correctamente.")
     return redirect("inicio_sesion")
 
-
 # ---------- Paneles ----------
+
 @requerir_rol("administrador")
 def panel_administrador(request):
     try:
@@ -158,33 +170,23 @@ def panel_administrador(request):
 
     total_libros = Libros.objects.count()
 
-    # Cantidad de empleados activos (badge azul)
-    empleados_activos = Usuarios.objects.filter(
-        rol__nombre__in=["administrador", "bibliotecario"],
-        estado__iexact="activo",
-    ).count()
-
-    # Parámetros de búsqueda y filtro
+    # Filtros de búsqueda
     query = (request.GET.get("q") or "").strip()
-    estado_filtro = (request.GET.get("estado") or "").lower()
+    estado_filtro = (request.GET.get("estado") or "").strip()
 
-    # Query base: solo admins y bibliotecarios
     empleados_qs = Usuarios.objects.select_related("rol").filter(
         rol__nombre__in=["administrador", "bibliotecario"]
     )
 
-    # Buscar por nombre
     if query:
         empleados_qs = empleados_qs.filter(nombre__icontains=query)
 
-    # Filtrar por estado (activo / inactivo)
     if estado_filtro in ["activo", "inactivo"]:
         empleados_qs = empleados_qs.filter(estado__iexact=estado_filtro)
 
-    empleados_qs = empleados_qs.order_by("-fecha_creacion")
+    empleados_activos = empleados_qs.filter(estado__iexact="activo").count()
 
-    # Paginación: 5 empleados por página
-    paginator = Paginator(empleados_qs, 5)
+    paginator = Paginator(empleados_qs.order_by("-fecha_creacion"), 10)
     page_number = request.GET.get("page")
     empleados_page = paginator.get_page(page_number)
 
@@ -200,42 +202,8 @@ def panel_administrador(request):
     return render(request, "seguridad/admin_home.html", contexto)
 
 
+@requerir_rol("administrador")
 def editar_empleado(request, empleado_id):
-    empleado = get_object_or_404(
-        Usuarios,
-        id=empleado_id,
-        rol__nombre__in=["administrador", "bibliotecario"],
-    )
-
-    if request.method == "POST":
-        nombre = (request.POST.get("nombre") or "").strip()
-        apellido = (request.POST.get("apellido") or "").strip()
-        email = (request.POST.get("email") or "").strip()
-        estado = (request.POST.get("estado") or "").strip().lower()
-
-        if not (nombre and apellido and email):
-            messages.error(request, "Todos los campos son obligatorios.")
-            return redirect("panel_administrador")
-
-        empleado.nombre = nombre
-        empleado.apellido = apellido
-        empleado.email = email
-
-        if estado in ["activo", "inactivo"]:
-            empleado.estado = estado
-
-        empleado.save()
-
-        messages.success(
-            request,
-            f"Empleado {empleado.nombre} {empleado.apellido} actualizado correctamente.",
-        )
-
-    return redirect("panel_administrador")
-
-
-@requerir_rol("bibliotecario")
-def panel_bibliotecario(request):
     try:
         usuario_actual = Usuarios.objects.select_related("rol").get(
             id=request.session.get("id_usuario")
@@ -243,33 +211,84 @@ def panel_bibliotecario(request):
     except Usuarios.DoesNotExist:
         return redirect("cerrar_sesion")
 
-    hoy = timezone.localdate()
+    if usuario_actual.rol.nombre != "administrador":
+        messages.error(request, "No tienes permisos para realizar esta acción.")
+        return redirect("panel_administrador")
 
-    # Solo préstamos vencidos: sin devolución y con fecha_fin menor a hoy
-    prestamos_vencidos_qs = Prestamos.objects.select_related(
-        "ejemplar__libro",
-        "cliente__usuario",
-    ).filter(
-        fecha_devolucion__isnull=True,
-        fecha_fin__lt=hoy,
-    ).order_by("fecha_fin")
+    empleado = get_object_or_404(Usuarios, id=empleado_id)
 
-    # Agregar días de retraso a cada préstamo
-    prestamos_lista = []
-    for p in prestamos_vencidos_qs:
-        p.dias_retraso = (hoy - p.fecha_fin).days
-        prestamos_lista.append(p)
+    if request.method != "POST":
+        return redirect("panel_administrador")
 
-    # Paginación: 5 por página
-    paginator = Paginator(prestamos_lista, 5)
-    page_number = request.GET.get("page")
-    prestamos_retraso_page = paginator.get_page(page_number)
+    nombre = (request.POST.get("nombre") or "").strip()
+    apellido = (request.POST.get("apellido") or "").strip()
+    email = (request.POST.get("email") or "").strip()
+    estado = (request.POST.get("estado") or "").strip()
+
+    if not (nombre and apellido and email and estado):
+        messages.error(request, "Todos los campos son obligatorios.")
+        return redirect("panel_administrador")
+
+    if estado not in ["activo", "inactivo"]:
+        messages.error(request, "Estado inválido.")
+        return redirect("panel_administrador")
+
+    if Usuarios.objects.exclude(id=empleado.id).filter(email=email).exists():
+        messages.error(
+            request,
+            "Ya existe un usuario con ese correo electrónico."
+        )
+        return redirect("panel_administrador")
+
+    empleado.nombre = nombre
+    empleado.apellido = apellido
+    empleado.email = email
+    empleado.estado = estado
+    empleado.save()
+
+    messages.success(request, "Empleado actualizado correctamente.")
+    return redirect("panel_administrador")
+
+
+def panel_bibliotecario(request):
+    """
+    Pantalla de inicio del bibliotecario.
+    Muestra en tiempo real:
+      - total de préstamos
+      - préstamos activos
+      - préstamos en mora
+      - tabla con los préstamos (últimos registrados)
+    """
+
+    usuario_id = request.session.get("id_usuario")
+    if not usuario_id:
+        return redirect("cerrar_sesion")
+
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(id=usuario_id)
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    prestamos_qs = (
+        Prestamos.objects
+        .select_related("cliente__usuario", "ejemplar__libro")
+        .order_by("-fecha_inicio")
+    )
+
+    prestamos_total = prestamos_qs.count()
+    prestamos_activos = prestamos_qs.filter(estado__iexact="activo").count()
+    prestamos_en_mora = prestamos_qs.filter(estado__iexact="mora").count()
+
+    prestamos_bibliotecario = prestamos_qs[:20]
 
     contexto = {
         "usuario_actual": usuario_actual,
-        "prestamos_retraso": prestamos_retraso_page,
-        "prestamos_vencidos": prestamos_vencidos_qs.count(),  # solo esto se usa en el HTML
+        "prestamos_total": prestamos_total,
+        "prestamos_activos": prestamos_activos,
+        "prestamos_en_mora": prestamos_en_mora,
+        "prestamos_bibliotecario": prestamos_bibliotecario,
     }
+
     return render(request, "seguridad/bibliotecario_home.html", contexto)
 
 
@@ -293,7 +312,9 @@ def registrar_empleado(request):
         "exito": None,
         "error": None,
         "roles": roles_disponibles,
-        "usuario_actual": Usuarios.objects.get(id=request.session.get("id_usuario")),
+        "usuario_actual": Usuarios.objects.get(
+            id=request.session.get("id_usuario")
+        ),
     }
 
     if request.method == "POST":
@@ -304,7 +325,6 @@ def registrar_empleado(request):
         rol_formulario = request.POST.get("rol", "")
         estado = request.POST.get("estado", "activo")
 
-        # Validaciones
         if not all([nombre, apellido, correo, contrasena, rol_formulario]):
             contexto["error"] = "Completa todos los campos obligatorios."
             return render(request, "seguridad/registrar_empleados.html", contexto)
@@ -313,8 +333,10 @@ def registrar_empleado(request):
             contexto["error"] = "La contraseña debe tener al menos 8 caracteres."
             return render(request, "seguridad/registrar_empleados.html", contexto)
 
-        # Mapear rol formulario a base de datos
-        mapeo_roles = {"admin": "administrador", "bibliotecario": "bibliotecario"}
+        mapeo_roles = {
+            "admin": "administrador",
+            "bibliotecario": "bibliotecario",
+        }
         rol_bd = mapeo_roles.get(rol_formulario)
 
         if not rol_bd:
@@ -324,14 +346,15 @@ def registrar_empleado(request):
         try:
             objeto_rol = Roles.objects.get(nombre=rol_bd)
         except Roles.DoesNotExist:
-            contexto["error"] = f"No existe el rol '{rol_bd}' en la base de datos."
+            contexto["error"] = (
+                f"No existe el rol '{rol_bd}' en la base de datos."
+            )
             return render(request, "seguridad/registrar_empleados.html", contexto)
 
         if Usuarios.objects.filter(email=correo).exists():
             contexto["error"] = "Ya existe un usuario con ese correo."
             return render(request, "seguridad/registrar_empleados.html", contexto)
 
-        # Crear el usuario
         try:
             Usuarios.objects.create(
                 rol=objeto_rol,
@@ -358,14 +381,11 @@ def registrar_empleado(request):
 
     return render(request, "seguridad/registrar_empleados.html", contexto)
 
+# ---------- Gestión de clientes (bloqueo / desbloqueo) ----------
 
 @requerir_rol("administrador")
-@csrf_protect
-def configurar_reglas_prestamo(request):
-    """
-    Vista para que el administrador configure las reglas generales de préstamo.
-    Usa la última regla registrada o crea una nueva si no existe.
-    """
+def gestion_clientes(request):
+
     try:
         usuario_actual = Usuarios.objects.select_related("rol").get(
             id=request.session.get("id_usuario")
@@ -373,156 +393,338 @@ def configurar_reglas_prestamo(request):
     except Usuarios.DoesNotExist:
         return redirect("cerrar_sesion")
 
-    # Tomamos la última regla (puede ser la única) o None si no existe
-    regla = ReglasPrestamo.objects.order_by("-fecha_actualizacion").first()
+    query = (request.GET.get("q") or "").strip()
+    estado_filtro = (request.GET.get("estado") or "").strip()
+    solo_bloqueados = request.GET.get("solo_bloqueados") == "1"
+
+    clientes = Clientes.objects.select_related("usuario").all()
+
+    if query:
+        clientes = clientes.filter(
+            Q(usuario__nombre__icontains=query)
+            | Q(usuario__apellido__icontains=query)
+            | Q(dni__icontains=query)
+        )
+
+    if estado_filtro == "activo":
+        clientes = clientes.filter(estado="activo")
+    elif estado_filtro == "inactivo":
+        clientes = clientes.filter(estado="inactivo")
+
+    if solo_bloqueados:
+        clientes = clientes.filter(bloqueado=True)
+
+    contexto = {
+        "usuario_actual": usuario_actual,
+        "clientes": clientes,
+        "query": query,
+        "estado_filtro": estado_filtro,
+        "solo_bloqueados": solo_bloqueados,
+    }
+    return render(request, "seguridad/gestion_clientes.html", contexto)
+
+@requerir_rol("administrador")
+def bloquear_cliente(request, cliente_id):
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(
+            id=request.session.get("id_usuario")
+        )
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    cliente = get_object_or_404(Clientes, id=cliente_id)
+
+    if cliente.bloqueado:
+        messages.info(request, "El cliente ya se encuentra bloqueado.")
+        return redirect("gestion_clientes")
+
+    cliente.bloqueado = True
+
+    if hasattr(cliente, "fecha_bloqueo"):
+        cliente.fecha_bloqueo = timezone.now()
+
+    if hasattr(cliente, "motivo_bloqueo") and not cliente.motivo_bloqueo:
+        cliente.motivo_bloqueo = "Bloqueado manualmente por el administrador."
+
+    if hasattr(cliente, "estado"):
+        cliente.estado = "inactivo"
+
+    cliente.save()
+
+    try:
+        Bitacora.objects.create(
+            usuario=usuario_actual,
+            accion=f"BLOQUEÓ CLIENTE ID={cliente.id}",
+            fecha=timezone.now(),
+        )
+    except Exception:
+        pass
+
+    messages.success(request, "Cliente bloqueado correctamente.")
+    return redirect("gestion_clientes")
+
+@requerir_rol("administrador")
+def desbloquear_cliente(request, cliente_id):
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(
+            id=request.session.get("id_usuario")
+        )
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    cliente = get_object_or_404(Clientes, id=cliente_id)
+
+    if not cliente.bloqueado:
+        messages.info(request, "El cliente no está bloqueado.")
+        return redirect("gestion_clientes")
+
+    cliente.bloqueado = False
+
+    if hasattr(cliente, "estado"):
+        cliente.estado = "activo"
+
+    cliente.save()
+
+    try:
+        Bitacora.objects.create(
+            usuario=usuario_actual,
+            accion=f"DESBLOQUEÓ CLIENTE ID={cliente.id}",
+            fecha=timezone.now(),
+        )
+    except Exception:
+        pass
+
+    messages.success(request, "Cliente desbloqueado correctamente.")
+    return redirect("gestion_clientes")
+
+# ---------- Reglas de préstamo, inventario, préstamos ----------
+
+@requerir_rol("administrador")
+@csrf_protect
+def configurar_reglas_prestamo(request):
+
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(
+            id=request.session.get("id_usuario")
+        )
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    regla_vigente = (
+        ReglasPrestamo.objects.order_by("-fecha_actualizacion").first()
+    )
+
+    historial_reglas = ReglasPrestamo.objects.all().order_by("-fecha_actualizacion")
 
     if request.method == "POST":
-        plazo_dias = request.POST.get("plazo_dias")
-        limite_prestamos = request.POST.get("limite_prestamos")
-        tarifa_mora_diaria = request.POST.get("tarifa_mora_diaria")
-        # si después quieres descripción adicional, la agregamos; por ahora lo simplificamos
+        plazo_dias = (request.POST.get("plazo_dias") or "").strip()
+        limite_prestamos = (request.POST.get("limite_prestamos") or "").strip()
+        tarifa_mora_diaria = (request.POST.get("tarifa_mora_diaria") or "").strip()
         descripcion = "Reglas generales de préstamo"
 
         if not plazo_dias or not limite_prestamos or not tarifa_mora_diaria:
             messages.error(request, "Completa todos los campos.")
         else:
             try:
-                if regla is None:
-                    regla = ReglasPrestamo()
+                plazo_dias_int = int(plazo_dias)
+                limite_prestamos_int = int(limite_prestamos)
+                tarifa_mora = float(tarifa_mora_diaria)
 
-                regla.plazo_dias = int(plazo_dias)
-                regla.limite_prestamos = int(limite_prestamos)
-                regla.tarifa_mora_diaria = tarifa_mora_diaria
-                regla.descripcion = descripcion
-                regla.fecha_actualizacion = timezone.now()
-                regla.save()
+                nueva_regla = ReglasPrestamo.objects.create(
+                    plazo_dias=plazo_dias_int,
+                    limite_prestamos=limite_prestamos_int,
+                    tarifa_mora_diaria=tarifa_mora,
+                    descripcion=descripcion,
+                    fecha_actualizacion=timezone.now(),
+                )
 
                 Bitacora.objects.create(
                     usuario=usuario_actual,
                     accion=(
-                        f"ACTUALIZÓ REGLAS DE PRÉSTAMO: "
-                        f"plazo={regla.plazo_dias} días, "
-                        f"límite={regla.limite_prestamos}, "
-                        f"mora={regla.tarifa_mora_diaria}"
+                        "ACTUALIZÓ REGLAS DE PRÉSTAMO: "
+                        f"plazo={nueva_regla.plazo_dias} días, "
+                        f"límite={nueva_regla.limite_prestamos}, "
+                        f"mora={nueva_regla.tarifa_mora_diaria}"
                     ),
                     fecha=timezone.now(),
                 )
 
                 messages.success(
-                    request, "Reglas de préstamo actualizadas correctamente."
+                    request,
+                    "Reglas de préstamo actualizadas correctamente."
                 )
                 return redirect("configurar_reglas_prestamo")
 
+            except ValueError:
+                messages.error(
+                    request,
+                    "Verifica que los campos numéricos tengan valores válidos."
+                )
             except Exception as e:
-                messages.error(request, f"Error al guardar las reglas: {str(e)}")
+                messages.error(
+                    request,
+                    f"Error al guardar las reglas: {str(e)}"
+                )
 
     contexto = {
         "usuario_actual": usuario_actual,
-        "regla": regla,
+        "regla": regla_vigente,
+        "historial_reglas": historial_reglas,
     }
     return render(request, "seguridad/reglas.html", contexto)
 
-
 @requerir_rol("bibliotecario")
+@csrf_protect
 def inventario(request):
-    # Usuario logueado
-    usuario_actual = Usuarios.objects.select_related("rol").get(
-        id=request.session.get("id_usuario")
-    )
 
-    # Búsqueda
-    query = request.GET.get("q", "").strip()
-    if query:
-        libros_qs = (
-            Libros.objects.filter(titulo__icontains=query)
-            | Libros.objects.filter(autor__icontains=query)
-            | Libros.objects.filter(isbn__icontains=query)
-            | Libros.objects.filter(categoria__icontains=query)
-        ).distinct().order_by("autor", "titulo")
-    else:
-        libros_qs = Libros.objects.all().order_by("titulo")
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(
+            id=request.session.get("id_usuario")
+        )
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
 
-    # Paginación: 5 libros por página
-    paginator = Paginator(libros_qs, 5)
-    page_number = request.GET.get("page")
-    page_obj = paginator.get_page(page_number)
+    editorial_preseleccionada = (request.GET.get("editorial") or "").strip()
 
-    # POST: agregar libro
-    if request.method == "POST" and "agregar_libro" in request.POST:
-        try:
-            anio_publicacion = str(request.POST.get("anio_publicacion"))
+    if request.method == "POST":
 
-            portada_file = request.FILES.get("portada")  # puede venir vacío
+        if "agregar_libro" in request.POST:
+            isbn = (request.POST.get("isbn") or "").strip()
+            titulo = (request.POST.get("titulo") or "").strip()
+            autor = (request.POST.get("autor") or "").strip()
+            categoria = (request.POST.get("categoria") or "").strip()
+            editorial = (request.POST.get("editorial") or "").strip()
+            anio_publicacion = (request.POST.get("anio_publicacion") or "").strip()
+            stock_raw = (request.POST.get("stock") or "0").strip()
 
-            libro = Libros(
-                isbn=request.POST.get("isbn"),
-                titulo=request.POST.get("titulo"),
-                autor=request.POST.get("autor"),
-                categoria=request.POST.get("categoria"),
-                editorial=request.POST.get("editorial"),
+            precio_raw = (request.POST.get("precio_venta") or "0").strip()
+            impuesto_raw = (request.POST.get("impuesto_porcentaje") or "0").strip()
+
+            portada = request.FILES.get("portada")
+
+            if not (isbn and titulo and autor):
+                messages.error(request, "ISBN, título y autor son obligatorios.")
+                return redirect("inventario")
+
+            if Libros.objects.filter(isbn=isbn).exists():
+                messages.error(request, f"Ya existe un libro con ISBN {isbn}.")
+                return redirect("inventario")
+
+            try:
+                stock_total = int(stock_raw)
+            except ValueError:
+                stock_total = 0
+
+            try:
+                precio_venta = Decimal(precio_raw)
+            except (InvalidOperation, TypeError):
+                precio_venta = Decimal("0.00")
+
+            try:
+                impuesto_porcentaje = Decimal(impuesto_raw)
+            except (InvalidOperation, TypeError):
+                impuesto_porcentaje = Decimal("0.00")
+
+            libro = Libros.objects.create(
+                isbn=isbn,
+                titulo=titulo,
+                autor=autor,
+                categoria=categoria,
+                editorial=editorial,
                 anio_publicacion=anio_publicacion,
-                stock_total=request.POST.get("stock", 0),
-                portada=portada_file,  # archivo de imagen
-                fecha_registro=timezone.now(),  # fecha automática
+                stock_total=stock_total,
+                portada=portada,
+                fecha_registro=timezone.now(),
+                precio_venta=precio_venta,
+                impuesto_porcentaje=impuesto_porcentaje,
             )
-            libro.save()
-            messages.success(request, "Libro agregado correctamente")
+
+            messages.success(request, f"Libro '{libro.titulo}' agregado correctamente.")
+
+            if editorial:
+                url = f"{reverse('inventario')}?editorial={editorial}"
+                return redirect(url)
+
             return redirect("inventario")
 
-        except Exception as e:
-            messages.error(request, f"Error al agregar el libro: {str(e)}")
-            return redirect("inventario")
-
-    # POST: editar libro
-    if request.method == "POST" and "editar_libro" in request.POST:
-        try:
+        if "editar_libro" in request.POST:
             libro_id = request.POST.get("libro_id")
             libro = get_object_or_404(Libros, id=libro_id)
 
-            anio_publicacion = str(request.POST.get("anio_publicacion"))
+            libro.titulo = (request.POST.get("titulo") or "").strip()
+            libro.autor = (request.POST.get("autor") or "").strip()
+            libro.categoria = (request.POST.get("categoria") or "").strip()
+            libro.editorial = (request.POST.get("editorial") or "").strip()
+            libro.anio_publicacion = (request.POST.get("anio_publicacion") or "").strip()
 
-            libro.titulo = request.POST.get("titulo")
-            libro.autor = request.POST.get("autor")
-            libro.categoria = request.POST.get("categoria")
-            libro.editorial = request.POST.get("editorial")
-            libro.anio_publicacion = anio_publicacion
-            libro.stock_total = request.POST.get("stock", 0)
+            stock_raw = (request.POST.get("stock") or "0").strip()
+            precio_raw = (request.POST.get("precio_venta") or "0").strip()
+            impuesto_raw = (request.POST.get("impuesto_porcentaje") or "0").strip()
 
-            # Si viene una nueva portada, la reemplazamos
-            portada_file = request.FILES.get("portada")
-            if portada_file:
-                libro.portada = portada_file
+            try:
+                libro.stock_total = int(stock_raw)
+            except ValueError:
+                libro.stock_total = 0
+
+            try:
+                libro.precio_venta = Decimal(precio_raw)
+            except (InvalidOperation, TypeError):
+                libro.precio_venta = Decimal("0.00")
+
+            try:
+                libro.impuesto_porcentaje = Decimal(impuesto_raw)
+            except (InvalidOperation, TypeError):
+                libro.impuesto_porcentaje = Decimal("0.00")
+
+            portada = request.FILES.get("portada")
+            if portada:
+                libro.portada = portada
 
             libro.save()
-
-            Bitacora.objects.create(
-                usuario=usuario_actual,
-                accion=f"EDITO EL LIBRO: '{libro.titulo}'",
-                fecha=timezone.now(),
-            )
-
-            messages.success(request, "Libro actualizado correctamente")
+            messages.success(request, f"Libro '{libro.titulo}' actualizado correctamente.")
             return redirect("inventario")
 
-        except Exception as e:
-            messages.error(request, f"Error al actualizar el libro: {str(e)}")
-            return redirect("inventario")
+        messages.error(request, "Acción no reconocida en inventario.")
+        return redirect("inventario")
+
+    query = (request.GET.get("q") or "").strip()
+
+    libros_qs = Libros.objects.all().order_by("-fecha_registro", "titulo")
+
+    if query:
+        libros_qs = libros_qs.filter(
+            Q(titulo__icontains=query)
+            | Q(autor__icontains=query)
+            | Q(isbn__icontains=query)
+            | Q(categoria__icontains=query)
+        )
+
+    editoriales = (
+        Libros.objects
+        .exclude(editorial__isnull=True)
+        .exclude(editorial__exact="")
+        .values_list("editorial", flat=True)
+        .distinct()
+        .order_by("editorial")
+    )
+
+    paginator = Paginator(libros_qs, 10)
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
 
     contexto = {
         "usuario_actual": usuario_actual,
         "page_obj": page_obj,
         "query": query,
+        "editoriales": editoriales,
+        "editorial_preseleccionada": editorial_preseleccionada,
     }
-
     return render(request, "seguridad/inventario.html", contexto)
-
 
 
 @requerir_rol("bibliotecario")
 def gestion_prestamos(request):
-    """
-    Lista de préstamos activos para el bibliotecario, con buscador y paginación.
-    """
+
     try:
         usuario_actual = Usuarios.objects.select_related("rol").get(
             id=request.session.get("id_usuario")
@@ -540,9 +742,9 @@ def gestion_prestamos(request):
 
     if query:
         prestamos_qs = prestamos_qs.filter(
-            Q(cliente__usuario__nombre__icontains=query) |
-            Q(cliente__usuario__apellido__icontains=query) |
-            Q(cliente__dni__icontains=query)
+            Q(cliente__usuario__nombre__icontains=query)
+            | Q(cliente__usuario__apellido__icontains=query)
+            | Q(cliente__dni__icontains=query)
         )
 
     paginator = Paginator(prestamos_qs, 10)
@@ -565,16 +767,10 @@ UBICACIONES_PREDEFINIDAS = [
 ]
 
 def _crear_ejemplar_para_libro(libro):
-    """
-    Crea un Ejemplar físico para un libro dado, generando:
-    - codigo_interno único (EJ-<id_libro>-####)
-    - ubicacion aleatoria
-    - estado aleatorio: nuevo / usado
-    """
+
     base = f"EJ-{libro.id}-"
     codigo = None
 
-    # Intentamos hasta 10 códigos diferentes para evitar colisión por unique
     for _ in range(10):
         sufijo = random.randint(1000, 9999)
         candidato = f"{base}{sufijo}"
@@ -582,7 +778,6 @@ def _crear_ejemplar_para_libro(libro):
             codigo = candidato
             break
 
-    # Último recurso si por alguna razón no se encontró libre
     if codigo is None:
         codigo = f"{base}{timezone.now().strftime('%H%M%S')}"
 
@@ -596,18 +791,10 @@ def _crear_ejemplar_para_libro(libro):
         estado=estado,
     )
 
-
 @requerir_rol("bibliotecario")
 @csrf_protect
 def registrar_prestamo(request):
-    """
-    Registrar un nuevo préstamo usando las reglas vigentes.
-    - Busca cliente por DNI
-    - Busca libro por ISBN
-    - Crea un Ejemplar físico aleatorio (codigo_interno, ubicacion, estado)
-    - Disminuye stock_total del libro
-    - Muestra pantalla de detalle del préstamo + ejemplar
-    """
+    
     try:
         usuario_actual = Usuarios.objects.select_related("rol").get(
             id=request.session.get("id_usuario")
@@ -635,7 +822,6 @@ def registrar_prestamo(request):
         form_data["dni"] = dni
         form_data["isbn"] = isbn
 
-        # Validar campos obligatorios
         if not dni or not isbn:
             messages.error(request, "Completa todos los campos.")
             return render(
@@ -649,7 +835,6 @@ def registrar_prestamo(request):
                 },
             )
 
-        # Parsear fecha de inicio
         try:
             fecha_inicio = datetime.strptime(fecha_inicio_str, "%Y-%m-%d").date()
         except ValueError:
@@ -666,7 +851,10 @@ def registrar_prestamo(request):
             )
 
         if fecha_inicio < hoy:
-            messages.error(request, "La fecha de inicio no puede ser anterior a hoy.")
+            messages.error(
+                request,
+                "La fecha de inicio no puede ser anterior a hoy."
+            )
             return render(
                 request,
                 "seguridad/registrar_prestamo.html",
@@ -678,13 +866,16 @@ def registrar_prestamo(request):
                 },
             )
 
-        # Buscar cliente por DNI
         try:
             cliente = Clientes.objects.select_related("usuario").get(
-                dni=dni, estado__iexact="activo"
+                dni=dni,
+                estado__iexact="activo",
             )
         except Clientes.DoesNotExist:
-            messages.error(request, "No se encontró un cliente activo con ese DNI.")
+            messages.error(
+                request,
+                "No se encontró un cliente activo con ese DNI."
+            )
             return render(
                 request,
                 "seguridad/registrar_prestamo.html",
@@ -696,7 +887,23 @@ def registrar_prestamo(request):
                 },
             )
 
-        # Validar límite de préstamos activos
+        if actualizar_bloqueo_por_mora(cliente):
+            messages.error(
+                request,
+                "El cliente está bloqueado (por mora o por decisión administrativa). "
+                "No puede realizar nuevos préstamos hasta regularizar su situación."
+            )
+            return render(
+                request,
+                "seguridad/registrar_prestamo.html",
+                {
+                    "usuario_actual": usuario_actual,
+                    "regla": regla,
+                    "hoy": hoy,
+                    "form_data": form_data,
+                },
+            )
+
         prestamos_activos_cliente = Prestamos.objects.filter(
             cliente=cliente,
             estado="activo",
@@ -705,7 +912,10 @@ def registrar_prestamo(request):
         if prestamos_activos_cliente >= regla.limite_prestamos:
             messages.error(
                 request,
-                f"El cliente ya alcanzó el límite de {regla.limite_prestamos} préstamos activos."
+                (
+                    "El cliente ya alcanzó el límite de "
+                    f"{regla.limite_prestamos} préstamos activos."
+                ),
             )
             return render(
                 request,
@@ -718,7 +928,6 @@ def registrar_prestamo(request):
                 },
             )
 
-        # Buscar libro por ISBN
         try:
             libro = Libros.objects.get(isbn=isbn)
         except Libros.DoesNotExist:
@@ -734,9 +943,11 @@ def registrar_prestamo(request):
                 },
             )
 
-        # Validar stock
         if not libro.stock_total or libro.stock_total <= 0:
-            messages.error(request, "No hay stock disponible para este libro.")
+            messages.error(
+                request,
+                "No hay stock disponible para este libro."
+            )
             return render(
                 request,
                 "seguridad/registrar_prestamo.html",
@@ -748,17 +959,13 @@ def registrar_prestamo(request):
                 },
             )
 
-        # Disminuir stock del libro
         libro.stock_total = (libro.stock_total or 0) - 1
         libro.save()
 
-        # Crear ejemplar físico aleatorio (codigo_interno, ubicacion, estado)
         ejemplar = _crear_ejemplar_para_libro(libro)
 
-        # Calcular fecha fin según plazo de la regla
         fecha_fin = fecha_inicio + timedelta(days=regla.plazo_dias)
 
-        # Crear préstamo
         prestamo = Prestamos.objects.create(
             cliente=cliente,
             ejemplar=ejemplar,
@@ -770,13 +977,14 @@ def registrar_prestamo(request):
         Bitacora.objects.create(
             usuario=usuario_actual,
             accion=(
-                f"REGISTRO PRÉSTAMO: cliente={cliente.dni}, "
-                f"ejemplar={ejemplar.codigo_interno}, id_prestamo={prestamo.id}"
+                "REGISTRO PRÉSTAMO: "
+                f"cliente={cliente.dni}, "
+                f"ejemplar={ejemplar.codigo_interno}, "
+                f"id_prestamo={prestamo.id}"
             ),
             fecha=timezone.now(),
         )
 
-        # En lugar de redirigir, mostramos pantalla con los datos del EJEMPLAR
         messages.success(request, "Préstamo registrado correctamente.")
         return render(
             request,
@@ -790,7 +998,6 @@ def registrar_prestamo(request):
             },
         )
 
-    # GET: mostrar formulario vacío
     contexto = {
         "usuario_actual": usuario_actual,
         "regla": regla,
@@ -799,16 +1006,19 @@ def registrar_prestamo(request):
     }
     return render(request, "seguridad/registrar_prestamo.html", contexto)
 
-
-
 @requerir_rol("bibliotecario")
 @csrf_protect
 def devolver_prestamo(request, prestamo_id):
-    """
-    Marca un préstamo como devuelto.
-    """
+    
     if request.method != "POST":
         return redirect("gestion_prestamos")
+
+    try:
+        usuario_actual = Usuarios.objects.get(
+            id=request.session.get("id_usuario")
+        )
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
 
     prestamo = get_object_or_404(
         Prestamos,
@@ -816,31 +1026,63 @@ def devolver_prestamo(request, prestamo_id):
         estado="activo",
     )
 
-    prestamo.fecha_devolucion = timezone.localdate()
+    hoy = timezone.localdate()
+    prestamo.fecha_devolucion = hoy
     prestamo.estado = "devuelto"
     prestamo.save()
 
-    # Opcional: marcar ejemplar como disponible
-    # ejemplar = prestamo.ejemplar
-    # ejemplar.estado = "disponible"
-    # ejemplar.save()
+    dias_mora = 0
+    if prestamo.fecha_fin and hoy > prestamo.fecha_fin:
+        dias_mora = (hoy - prestamo.fecha_fin).days
 
-    Bitacora.objects.create(
-        usuario=Usuarios.objects.get(id=request.session.get("id_usuario")),
-        accion=f"DEVOLVIÓ PRÉSTAMO id={prestamo.id}",
-        fecha=timezone.now(),
-    )
+    if dias_mora > 0:
+        regla = ReglasPrestamo.objects.order_by("-fecha_actualizacion").first()
+        monto_mora = None
+        if regla:
 
-    messages.success(request, "Libro devuelto.")
+            monto_mora = regla.tarifa_mora_diaria * dias_mora
+
+        cliente = prestamo.cliente
+        motivo = (
+            f"Mora de {dias_mora} día(s) en devolución de préstamo ID={prestamo.id}"
+        )
+        if monto_mora is not None:
+            motivo += f", monto estimado: L. {monto_mora}"
+
+        cliente.bloqueado = True
+        cliente.motivo_bloqueo = motivo
+        cliente.fecha_bloqueo = timezone.now()
+        cliente.save()
+
+        Bitacora.objects.create(
+            usuario=usuario_actual,
+            accion=(
+                "DEVOLVIÓ PRÉSTAMO CON MORA "
+                f"id={prestamo.id}, cliente={cliente.dni}, días_mora={dias_mora}"
+            ),
+            fecha=timezone.now(),
+        )
+
+        messages.warning(
+            request,
+            "Préstamo devuelto con "
+            f"{dias_mora} día(s) de mora. "
+            "El cliente ha sido bloqueado hasta que regularice la situación.",
+        )
+    else:
+        Bitacora.objects.create(
+            usuario=usuario_actual,
+            accion=f"DEVOLVIÓ PRÉSTAMO id={prestamo.id} sin mora",
+            fecha=timezone.now(),
+        )
+        messages.success(request, "El préstamo se marcó como devuelto.")
+
     return redirect("gestion_prestamos")
-
 
 @requerir_rol("bibliotecario")
 @csrf_protect
 def renovar_prestamo(request, prestamo_id):
-    """
-    Renueva la fecha fin de un préstamo activo.
-    """
+    
     if request.method != "POST":
         return redirect("gestion_prestamos")
 
@@ -853,7 +1095,8 @@ def renovar_prestamo(request, prestamo_id):
     nueva_fecha_str = request.POST.get("nueva_fecha_fin")
     if not nueva_fecha_str:
         messages.error(
-            request, "Debes seleccionar una nueva fecha de devolución."
+            request,
+            "Debes seleccionar una nueva fecha de devolución."
         )
         return redirect("gestion_prestamos")
 
@@ -861,14 +1104,18 @@ def renovar_prestamo(request, prestamo_id):
         nueva_fecha = datetime.strptime(nueva_fecha_str, "%Y-%m-%d").date()
     except ValueError:
         messages.error(
-            request, "La nueva fecha de devolución no es válida."
+            request,
+            "La nueva fecha de devolución no es válida."
         )
         return redirect("gestion_prestamos")
 
     if nueva_fecha <= prestamo.fecha_fin:
         messages.error(
             request,
-            "La nueva fecha de devolución debe ser mayor a la fecha actual de devolución.",
+            (
+                "La nueva fecha de devolución debe ser mayor a la fecha "
+                "actual de devolución."
+            ),
         )
         return redirect("gestion_prestamos")
 
@@ -877,30 +1124,423 @@ def renovar_prestamo(request, prestamo_id):
 
     Bitacora.objects.create(
         usuario=Usuarios.objects.get(id=request.session.get("id_usuario")),
-        accion=f"RENOVÓ PRÉSTAMO id={prestamo.id} nueva_fecha={nueva_fecha}",
+        accion=(
+            f"RENOVÓ PRÉSTAMO id={prestamo.id} "
+            f"nueva_fecha={nueva_fecha}"
+        ),
         fecha=timezone.now(),
     )
 
     messages.success(request, "El préstamo se renovó correctamente.")
     return redirect("gestion_prestamos")
 
+#------------------------ Ventas --------------------------
 
-##########################################################
-##-----------------------RECUPERACIÓN DE CONTRASEÑA-------
-##########################################################
+@requerir_rol("bibliotecario")
+@csrf_protect
+def realizar_venta(request):
+    
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(
+            id=request.session.get("id_usuario")
+        )
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    if request.method == "POST":
+        solicitud_id = request.POST.get("solicitud_id")
+        metodo_pago = (request.POST.get("metodo_pago") or "").strip()
+
+        if not solicitud_id or not metodo_pago:
+            messages.error(request, "Debes seleccionar la solicitud y el método de pago.")
+            return redirect("realizar_venta")
+
+        solicitud = get_object_or_404(
+            SolicitudVenta.objects.select_related(
+                "cliente",
+                "cliente__usuario",
+                "libro",
+                "reserva",
+            ),
+            id=solicitud_id,
+        )
+
+        if solicitud.estado != "pendiente":
+            messages.error(request, "Esta solicitud ya fue atendida o cancelada.")
+            return redirect("realizar_venta")
+
+        libro = solicitud.libro
+        cliente = solicitud.cliente
+        cantidad = solicitud.cantidad or 1
+
+        stock_disponible = libro.stock_total or 0
+        if stock_disponible < cantidad:
+            messages.error(
+                request,
+                f"No hay suficiente stock para '{libro.titulo}'. "
+                f"Disponible: {stock_disponible}, requerido: {cantidad}."
+            )
+            return redirect("realizar_venta")
+
+        precio_unitario = libro.precio_venta or Decimal("0.00")
+        porcentaje_impuesto = libro.impuesto_porcentaje or Decimal("0.00")
+
+        impuesto_unitario = precio_unitario * porcentaje_impuesto / Decimal("100")
+        subtotal = precio_unitario * cantidad
+        impuesto_total = impuesto_unitario * cantidad
+        total = subtotal + impuesto_total
+
+        with transaction.atomic():
+            venta = Ventas.objects.create(
+                cliente=cliente,
+                vendedor=usuario_actual,
+                metodo_pago=metodo_pago,
+                subtotal=subtotal,
+                impuesto=impuesto_total,
+                total=total,
+                estado="pagada",
+            )
+
+            DetalleVenta.objects.create(
+                venta=venta,
+                libro=libro,
+                cantidad=cantidad,
+                precio_unitario=precio_unitario,
+                impuesto_unitario=impuesto_unitario,
+                total_linea=total,
+            )
+
+            libro.stock_total = stock_disponible - cantidad
+            libro.save()
+
+            solicitud.estado = "atendida"
+            solicitud.save()
+
+            if solicitud.reserva:
+                solicitud.reserva.estado = "facturada"
+                solicitud.reserva.save()
+
+        messages.success(
+            request,
+            f"Venta #{venta.id} registrada para {cliente.usuario.nombre} "
+            f"{cliente.usuario.apellido}. Total L. {total}."
+        )
+        return redirect("realizar_venta")
+
+    solicitudes = (
+        SolicitudVenta.objects
+        .select_related("cliente", "cliente__usuario", "libro")
+        .filter(estado="pendiente")
+        .order_by("fecha_solicitud")
+    )
+
+    contexto = {
+        "usuario_actual": usuario_actual,
+        "solicitudes": solicitudes,
+    }
+    return render(request, "seguridad/realizar_venta.html", contexto)
+
+def _generar_factura_pdf(venta):
+
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+
+    width, height = letter
+    x_margin = 40
+    y = height - 50
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(x_margin, y, "BiblioNet - Factura")
+    y -= 30
+
+    c.setFont("Helvetica", 10)
+    c.drawString(x_margin, y, f"N° factura: {venta.id}")
+    y -= 15
+    c.drawString(x_margin, y, f"Fecha: {venta.fecha_venta.strftime('%d/%m/%Y %H:%M')}")
+    y -= 15
+
+    cliente = venta.cliente
+    c.drawString(x_margin, y, f"Cliente: {cliente.usuario.nombre} {cliente.usuario.apellido}")
+    y -= 15
+    c.drawString(x_margin, y, f"DNI: {cliente.dni}")
+    y -= 15
+
+    c.drawString(x_margin, y, f"Vendedor: {venta.vendedor.nombre} {venta.vendedor.apellido}")
+    y -= 25
+
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(x_margin, y, "Detalle de la venta")
+    y -= 20
+
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(x_margin, y, "Libro")
+    c.drawString(x_margin + 220, y, "Cant.")
+    c.drawString(x_margin + 260, y, "P. Unit")
+    c.drawString(x_margin + 340, y, "Impuesto")
+    c.drawString(x_margin + 420, y, "Total")
+    y -= 15
+    c.line(x_margin, y, width - x_margin, y)
+    y -= 15
+
+    c.setFont("Helvetica", 9)
+    for det in venta.detalles.all():
+        if y < 100:
+            c.showPage()
+            y = height - 50
+            c.setFont("Helvetica", 9)
+
+        c.drawString(x_margin, y, det.libro.titulo[:30])
+        c.drawString(x_margin + 220, y, str(det.cantidad))
+        c.drawRightString(x_margin + 310, y, f"L. {det.precio_unitario:.2f}")
+        c.drawRightString(x_margin + 390, y, f"{det.impuesto_unitario:.2f}%")
+        c.drawRightString(x_margin + 480, y, f"L. {det.total_linea:.2f}")
+        y -= 15
+
+    y -= 20
+    c.line(x_margin, y, width - x_margin, y)
+    y -= 15
+
+    c.setFont("Helvetica-Bold", 10)
+    c.drawRightString(x_margin + 400, y, "Subtotal:")
+    c.drawRightString(x_margin + 480, y, f"L. {venta.subtotal:.2f}")
+    y -= 15
+
+    c.drawRightString(x_margin + 400, y, "Impuesto:")
+    c.drawRightString(x_margin + 480, y, f"L. {venta.impuesto:.2f}")
+    y -= 15
+
+    c.drawRightString(x_margin + 400, y, "Total:")
+    c.drawRightString(x_margin + 480, y, f"L. {venta.total:.2f}")
+    y -= 30
+
+    c.setFont("Helvetica-Oblique", 9)
+    c.drawString(x_margin, y, "Gracias por su compra.")
+
+    c.showPage()
+    c.save()
+
+    pdf = buffer.getvalue()
+    buffer.close()
+
+    response = HttpResponse(content_type="application/pdf")
+    response["Content-Disposition"] = f'inline; filename="factura_{venta.id}.pdf"'
+    response.write(pdf)
+    return response
+
+
+def historial_ventas(request):
+    
+    usuario_id = request.session.get("id_usuario")
+    if not usuario_id:
+        return redirect("cerrar_sesion")
+
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(id=usuario_id)
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    if usuario_actual.rol.nombre != "administrador":
+        return redirect("panel_bibliotecario")
+
+    ventas_qs = (
+        Ventas.objects
+        .select_related("cliente__usuario", "vendedor")
+        .order_by("-id")
+    )
+
+    q = (request.GET.get("q") or "").strip()
+    estado = (request.GET.get("estado") or "").strip()
+
+    if q:
+        ventas_qs = ventas_qs.filter(
+            Q(cliente__dni__icontains=q) |
+            Q(cliente__usuario__nombre__icontains=q) |
+            Q(cliente__usuario__apellido__icontains=q) |
+            Q(vendedor__nombre__icontains=q) |
+            Q(vendedor__apellido__icontains=q) |
+            Q(id__icontains=q)
+        )
+
+    if estado:
+        ventas_qs = ventas_qs.filter(estado__iexact=estado)
+
+    total_ventas = ventas_qs.count()
+    total_monto = ventas_qs.aggregate(suma=Sum("total"))["suma"] or Decimal("0.00")
+
+    paginator = Paginator(ventas_qs, 20)
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
+
+    contexto = {
+        "usuario_actual": usuario_actual,
+        "page_obj": page_obj,
+        "query": q,
+        "estado_filtro": estado,
+        "total_ventas": total_ventas,
+        "total_monto": total_monto,
+    }
+
+    return render(request, "seguridad/historial_ventas.html", contexto)
+
+
+@csrf_protect
+def historial_compras_cliente(request):
+    """
+    Muestra todas las ventas/facturaciones realizadas al cliente logueado.
+    """
+    if "cliente_id" not in request.session:
+        messages.error(request, "Debes iniciar sesión para ver tu historial de compras.")
+        return redirect("inicio_sesion_cliente")
+
+    cliente = get_object_or_404(Clientes, id=request.session["cliente_id"])
+    usuario = cliente.usuario
+
+    ventas_qs = (
+        Ventas.objects
+        .select_related("cliente__usuario", "vendedor")
+        .filter(cliente=cliente)
+        .filter(estado__iexact="pagada")
+        .order_by("-id")
+    )
+
+    q = (request.GET.get("q") or "").strip()
+    if q:
+        ventas_qs = ventas_qs.filter(
+            Q(id__icontains=q) |
+            Q(metodo_pago__icontains=q) |
+            Q(vendedor__nombre__icontains=q) |
+            Q(vendedor__apellido__icontains=q)
+        )
+
+    total_compras = ventas_qs.count()
+    total_gastado = ventas_qs.aggregate(suma=Sum("total"))["suma"] or Decimal("0.00")
+
+    paginator = Paginator(ventas_qs, 10)
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
+
+    contexto = {
+        "cliente": cliente,
+        "usuario": usuario,
+        "page_obj": page_obj,
+        "total_compras": total_compras,
+        "total_gastado": total_gastado,
+        "query": q,
+    }
+
+    return render(request, "clientes/historial_compras_cliente.html", contexto)
+
+
+# ----------------------- Facturacion ----------------------
+
+@requerir_rol("bibliotecario")
+@csrf_protect
+def facturar_solicitud(request, solicitud_id):
+    
+    if request.method != "POST":
+        return redirect("realizar_venta")
+
+    try:
+        usuario_actual = Usuarios.objects.select_related("rol").get(
+            id=request.session.get("id_usuario")
+        )
+    except Usuarios.DoesNotExist:
+        return redirect("cerrar_sesion")
+
+    solicitud = get_object_or_404(
+        SolicitudVenta.objects.select_related(
+            "cliente",
+            "cliente__usuario",
+            "libro",
+            "reserva",
+        ),
+        id=solicitud_id,
+    )
+
+    if solicitud.estado != "pendiente":
+        messages.info(
+            request,
+            "Esta solicitud de venta ya fue procesada o cancelada."
+        )
+        return redirect("realizar_venta")
+
+    cliente = solicitud.cliente
+    libro = solicitud.libro
+    cantidad = solicitud.cantidad or 1
+
+    if libro.stock_total is None or libro.stock_total < cantidad:
+        messages.error(
+            request,
+            f"No hay suficiente stock para '{libro.titulo}'. "
+            f"Stock actual: {libro.stock_total or 0}."
+        )
+        return redirect("realizar_venta")
+
+    precio_unit = libro.precio_venta or Decimal("0.00")
+    impuesto_pct = libro.impuesto_porcentaje or Decimal("0.00")
+
+    subtotal = (precio_unit * cantidad).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    impuesto = (subtotal * (impuesto_pct / Decimal("100"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    total = subtotal + impuesto
+
+    metodo_pago = (request.POST.get("metodo_pago") or "Efectivo").strip() or "Efectivo"
+
+    with transaction.atomic():
+        venta = Ventas.objects.create(
+            cliente=cliente,
+            vendedor=usuario_actual,
+            metodo_pago=metodo_pago,
+            subtotal=subtotal,
+            impuesto=impuesto,
+            total=total,
+            estado="pagada",
+        )
+
+        DetalleVenta.objects.create(
+            venta=venta,
+            libro=libro,
+            cantidad=cantidad,
+            precio_unitario=precio_unit,
+            impuesto_unitario=impuesto_pct,
+            total_linea=total,
+        )
+
+        libro.stock_total = (libro.stock_total or 0) - cantidad
+        if libro.stock_total < 0:
+            libro.stock_total = 0
+        libro.save()
+
+        if solicitud.reserva:
+            solicitud.reserva.estado = "facturada"
+            solicitud.reserva.save()
+
+        solicitud.estado = "atendida"
+        solicitud.save()
+
+    try:
+        return _generar_factura_pdf(venta)
+    except ImportError:
+        messages.warning(
+            request,
+            "La venta se registró correctamente, pero falta la librería "
+            "reportlab para generar el PDF. Te mostramos la factura en pantalla."
+        )
+        return redirect("realizar_venta")
+
+#--------------------- Seguridad ------------------------
 
 def recuperar_contrasena_empleado(request):
-    """
-    Vista principal de recuperación / establecimiento de contraseña.
-    """
-    # Detectar si viene marcado como primer ingreso (GET o POST)
+    
     primer_ingreso_flag = (
         request.GET.get("primer_ingreso") == "1"
         or request.POST.get("primer_ingreso") == "1"
         or request.session.get("primer_ingreso") is True
     )
 
-    email_precargado = request.GET.get("email", "").strip().lower()
+    email_precargado = (request.GET.get("email") or "").strip().lower()
 
     if request.method == "POST":
         step = request.POST.get("step", "1")
@@ -919,9 +1559,7 @@ def recuperar_contrasena_empleado(request):
 
 
 def paso_1_verificar_correo(request):
-    """
-    Paso 1: verificación de correo.
-    """
+    
     email = (request.POST.get("email") or "").strip().lower()
     primer_ingreso_flag = request.POST.get("primer_ingreso") == "1"
 
@@ -938,7 +1576,6 @@ def paso_1_verificar_correo(request):
         )
 
     try:
-        
         usuario = (
             Usuarios.objects
             .select_related("rol")
@@ -987,15 +1624,11 @@ def paso_1_verificar_correo(request):
 
 
 def paso_2_nueva_contrasena(request):
-    """
-    Paso 2: establecer nueva contraseña.
-    """
     email = (request.POST.get("email") or "").strip().lower()
     new_password = request.POST.get("new_password", "")
     confirm_password = request.POST.get("confirm_password", "")
     primer_ingreso_flag = request.POST.get("primer_ingreso") == "1"
 
-    # Validar igualdad
     if new_password != confirm_password:
         return render(
             request,
@@ -1008,7 +1641,6 @@ def paso_2_nueva_contrasena(request):
             },
         )
 
-    # Validar fortaleza
     if not validar_fortaleza_contrasena(new_password):
         return render(
             request,
@@ -1025,7 +1657,6 @@ def paso_2_nueva_contrasena(request):
         )
 
     try:
-        # Buscar empleado activo por correo (administrador / bibliotecario)
         usuario = (
             Usuarios.objects
             .select_related("rol")
@@ -1038,7 +1669,6 @@ def paso_2_nueva_contrasena(request):
         )
 
         if not usuario:
-            
             return render(
                 request,
                 "seguridad/recuperar_contraseña.html",
@@ -1050,17 +1680,15 @@ def paso_2_nueva_contrasena(request):
 
         usuario.clave = make_password(new_password)
 
-        # Si era primer ingreso → se marca como ya no primer ingreso
         if primer_ingreso_flag or request.session.get("primer_ingreso"):
-            usuario.primer_ingreso = False
+            if hasattr(usuario, "primer_ingreso"):
+                usuario.primer_ingreso = False
 
         usuario.save()
 
-        # Limpiar flag de primer ingreso de la sesión
         if "primer_ingreso" in request.session:
             del request.session["primer_ingreso"]
 
-        # Paso 3: éxito
         contexto = {"step": 3}
         if primer_ingreso_flag:
             contexto[
@@ -1094,13 +1722,9 @@ def paso_2_nueva_contrasena(request):
 
 
 def validar_fortaleza_contrasena(password):
-    """
-    Valida que la contraseña cumpla con los requisitos de seguridad
-    """
     if len(password) < 8:
         return False
 
-    # Verificar requisitos de seguridad
     tiene_mayuscula = any(c.isupper() for c in password)
     tiene_minuscula = any(c.islower() for c in password)
     tiene_numero = any(c.isdigit() for c in password)
@@ -1113,13 +1737,11 @@ def validar_fortaleza_contrasena(password):
         and tiene_especial
     )
 
-################################################################
-####----------------------GESTION DE COMPRAS ------------------
-################################################################
+#------------------- Compras ---------------------
 
-
+@requerir_rol("administrador")
+@csrf_protect
 def gestion_proveedores(request):
-    # Verificar sesión
     try:
         usuario_actual = Usuarios.objects.get(id=request.session.get("id_usuario"))
     except Usuarios.DoesNotExist:
@@ -1129,15 +1751,11 @@ def gestion_proveedores(request):
 
     proveedores_qs = Proveedores.objects.all().order_by("nombre_comercial")
 
-    #--opciones de busqueda
-
     if query:
         proveedores_qs = proveedores_qs.filter(
             Q(nombre_comercial__icontains=query) |
             Q(rtn__icontains=query)
         )
-
-        #--agregar nuevo proveedor
 
     if request.method == "POST":
         if "agregar_proveedor" in request.POST:
@@ -1149,7 +1767,6 @@ def gestion_proveedores(request):
             suministro = (request.POST.get("suministro") or "").strip()
             estado = (request.POST.get("estado") or "").strip() or "activo"
 
-            # Validaciones 
             if not nombre_comercial:
                 messages.error(request, "El nombre comercial es obligatorio.")
                 return redirect("gestion_proveedores")
@@ -1170,7 +1787,6 @@ def gestion_proveedores(request):
                     )
                     return redirect("gestion_proveedores")
 
-            # Validar RTN único
             if Proveedores.objects.filter(rtn=rtn).exists():
                 messages.error(request, "Ya existe un proveedor con ese RTN.")
                 return redirect("gestion_proveedores")
@@ -1199,8 +1815,6 @@ def gestion_proveedores(request):
             correo_contacto = (request.POST.get("correo_contacto") or "").strip()
             suministro = (request.POST.get("suministro") or "").strip()
             estado = (request.POST.get("estado") or "").strip() or "activo"
-
-            #Validaciones
 
             if not nombre_comercial:
                 messages.error(request, "El nombre comercial es obligatorio.")
@@ -1238,17 +1852,16 @@ def gestion_proveedores(request):
             messages.success(request, "Proveedor actualizado correctamente.")
             return redirect("gestion_proveedores")
 
-
     paginator = Paginator(proveedores_qs, 10)
     page_number = request.GET.get("page")
     proveedores = paginator.get_page(page_number)
 
-    context = {
+    contexto = {
         "proveedores": proveedores,
         "query": query,
         "usuario_actual": usuario_actual,
     }
-    return render(request, "seguridad/proveedores.html", context)
+    return render(request, "seguridad/proveedores.html", contexto)
 
 
 def gestion_compras(request):
@@ -1290,9 +1903,6 @@ def gestion_compras(request):
     # ------------------------------
     if request.method == "POST":
 
-        # ==========================
-        # ➕ AGREGAR COMPRA
-        # ==========================
         if "agregar_compra" in request.POST:
             proveedor_nombre = (request.POST.get("proveedor_nombre") or "").strip()
             metodo_pago = (request.POST.get("metodo_pago") or "").strip()
@@ -1488,12 +2098,14 @@ def gestion_compras(request):
             messages.success(request, "La compra se actualizó correctamente.")
             return redirect("gestion_compras")
 
-    # Paginación
+    # ------------------------------
+    # GET / después de procesar POST
+    # ------------------------------
     paginator = Paginator(compras_qs, 10)
     page_number = request.GET.get("page")
     compras = paginator.get_page(page_number)
 
-    # 👇 Solo proveedores ACTIVOS para los selects del HTML
+    # Solo proveedores ACTIVOS para los selects del HTML
     proveedores = Proveedores.objects.filter(estado="activo").order_by("nombre_comercial")
     libros = Libros.objects.all().order_by("titulo")
 
@@ -1506,17 +2118,12 @@ def gestion_compras(request):
         "libros": libros,
         "usuario_actual": usuario_actual,
     }
+
     return render(request, "seguridad/gestion_compras.html", context)
-#------------comprobante_compra_digital---------------------------
-from django.http import HttpResponse
-from django.template.loader import render_to_string
-from xhtml2pdf import pisa
-import io
 
-# ...
 
+@requerir_rol("administrador")
 def comprobante_compra_pdf(request, compra_id):
-    # Carga la compra con proveedor, usuario y detalles de libros
     compra = get_object_or_404(
         Compras.objects
         .select_related("proveedor", "usuario")
@@ -1524,124 +2131,136 @@ def comprobante_compra_pdf(request, compra_id):
         id=compra_id,
     )
 
-    # Renderizar el HTML del comprobante
-    html = render_to_string("seguridad/comprobante_compra.html", {
-        "compra": compra,
-    })
-
-    # Preparar respuesta HTTP como PDF descargable
-    response = HttpResponse(content_type="application/pdf")
-    filename = f"comprobante_{compra.numero_factura}.pdf"
-    response["Content-Disposition"] = f'attachment; filename="{filename}"'
-
-    # Generar PDF desde el HTML
-    pisa_status = pisa.CreatePDF(
-        src=html,
-        dest=response,
-        encoding="utf-8",
-    )
-
-    if pisa_status.err:
-        return HttpResponse("Ocurrió un error al generar el PDF.", status=500)
-
-    return response
+    return _generar_comprobante_compra_pdf(compra)
 
 
-##############################################################################
-##----------------------------MI PERFIL -----------------------------------##
-#############################################################################
+def _generar_comprobante_compra_pdf(compra):
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter
 
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
 
-def mi_perfil(request):
-    # Intentar obtener sesión de EMPLEADO o de CLIENTE
-    usuario_id = request.session.get("id_usuario")    # admin / bibliotecario
-    cliente_id = request.session.get("cliente_id")    # cliente (OJO: mismo nombre que en login)
+    width, height = letter
+    x_margin = 40
+    y = height - 50
 
-    # Si no hay ninguno logueado, fuera
-    if not usuario_id and not cliente_id:
-        # Aquí puedes decidir a cuál login mandar; yo pondría el público
-        return redirect("inicio_sesion_cliente")
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(x_margin, y, "BiblioNet")
+    y -= 22
+    c.setFont("Helvetica", 12)
+    c.drawString(x_margin, y, "Comprobante de compra")
+    y -= 30
 
-    # ------------------------------------------------------------------
-    # CASO 1: Empleado logueado (admin / bibliotecario u otro rol)
-    # ------------------------------------------------------------------
-    if usuario_id:
-        usuario = get_object_or_404(
-            Usuarios.objects.select_related("rol"),
-            id=usuario_id
-        )
-        # Si este usuario también tiene ficha de cliente, la traemos (puede ser None)
-        cliente = Clientes.objects.filter(usuario=usuario).first()
+    c.setFont("Helvetica", 10)
+    c.drawString(x_margin, y, f"N° factura: {compra.numero_factura}")
+    y -= 15
 
-    # ------------------------------------------------------------------
-    # CASO 2: Cliente logueado (solo tiene cliente_id en sesión)
-    # ------------------------------------------------------------------
+    if compra.fecha:
+        c.drawString(x_margin, y, f"Fecha de compra: {compra.fecha.strftime('%d/%m/%Y')}")
     else:
-        cliente = get_object_or_404(
-            Clientes.objects.select_related("usuario__rol"),
-            id=cliente_id
+        c.drawString(x_margin, y, "Fecha de compra: —")
+    y -= 15
+
+    metodo = compra.metodo_pago or "—"
+    c.drawString(x_margin, y, f"Método de pago: {metodo}")
+    y -= 15
+
+    if compra.usuario:
+        c.drawString(
+            x_margin,
+            y,
+            f"Registrado por: {compra.usuario.nombre} {compra.usuario.apellido}"
         )
-        usuario = cliente.usuario   # usuario asociado al cliente
+    else:
+        c.drawString(x_margin, y, "Registrado por: —")
+    y -= 25
 
-    # -----------------------------
-    # POST → actualizar información
-    # -----------------------------
-    if request.method == "POST":
-        # Datos que sí se pueden editar del usuario
-        nombre = (request.POST.get("nombre") or "").strip()
-        apellido = (request.POST.get("apellido") or "").strip()
+    proveedor = compra.proveedor
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(x_margin, y, "Proveedor")
+    y -= 18
 
-        # Solo teléfono del cliente será editable (si hay cliente)
-        telefono = (request.POST.get("telefono") or "").strip()
+    c.setFont("Helvetica", 10)
+    c.drawString(x_margin, y, f"Nombre comercial: {proveedor.nombre_comercial}")
+    y -= 15
+    c.drawString(x_margin, y, f"RTN: {proveedor.rtn}")
+    y -= 15
 
-        # Foto de perfil
-        foto = request.FILES.get("foto_perfil")
+    tel = proveedor.telefono or "—"
+    c.drawString(x_margin, y, f"Teléfono: {tel}")
+    y -= 15
 
-        # Validaciones básicas
-        if not nombre or not apellido:
-            messages.error(request, "Nombre y apellido son obligatorios.")
-            return redirect("mi_perfil")
+    direccion = proveedor.direccion or "—"
+    c.drawString(x_margin, y, f"Dirección: {direccion}")
+    y -= 25
 
-        # Actualizar datos del usuario (NO se toca el correo aquí)
-        usuario.nombre = nombre
-        usuario.apellido = apellido
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(x_margin, y, "Libros de la compra")
+    y -= 20
 
-        if foto:
-            usuario.foto_perfil = foto
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(x_margin, y, "Libro")
+    c.drawString(x_margin + 260, y, "Cant.")
+    c.drawRightString(x_margin + 360, y, "Costo unit.")
+    c.drawRightString(x_margin + 460, y, "Subtotal")
+    y -= 12
+    c.line(x_margin, y, width - x_margin, y)
+    y -= 14
 
-        try:
-            usuario.save()
-        except DatabaseError:
-            messages.error(request, "Error al guardar los datos del usuario.")
-            return redirect("mi_perfil")
+    c.setFont("Helvetica", 9)
+    detalles = list(compra.detalles.all())
 
-        # Si tiene registro de cliente, actualizamos SOLO el teléfono
-        if cliente:
-            cliente.telefono = telefono or None
-            # NO se modifica cliente.dni
-            # NO se modifica ningún campo que use el correo como identidad
-            try:
-                cliente.save()
-            except DatabaseError:
-                messages.error(request, "Error al guardar los datos del cliente.")
-                return redirect("mi_perfil")
+    if not detalles:
+        c.drawString(x_margin, y, "No hay libros registrados en esta compra.")
+        y -= 20
+    else:
+        for det in detalles:
+            if y < 80:
+                c.showPage()
+                y = height - 50
+                c.setFont("Helvetica", 9)
 
-        # Registrar en bitácora
-        Bitacora.objects.create(
-            usuario=usuario,
-            accion=f"ACTUALIZÓ SU PERFIL (rol={usuario.rol.nombre})",
-            fecha=timezone.now(),
-        )
+            titulo = det.libro.titulo if det.libro else "—"
+            if det.libro and det.libro.isbn:
+                titulo = f"{titulo} ({det.libro.isbn})"
+            c.drawString(x_margin, y, titulo[:55])
 
-        messages.success(request, "Perfil actualizado correctamente.")
-        return redirect("mi_perfil")
+            c.drawString(x_margin + 260, y, str(det.cantidad))
 
-    # -----------------------------
-    # GET → mostrar pantalla de perfil
-    # -----------------------------
-    contexto = {
-        "usuario_actual": usuario,  # para navbar
-        "usuario": usuario,
-        "cliente": cliente,         # puede ser None si es solo empleado
-    }
-    return render(request, "seguridad/mi_perfil.html", contexto)
+            c.drawRightString(
+                x_margin + 360,
+                y,
+                f"L. {det.costo_unitario:.2f}"
+            )
+
+            c.drawRightString(
+                x_margin + 460,
+                y,
+                f"L. {det.subtotal:.2f}"
+            )
+            y -= 14
+
+    y -= 10
+    c.line(x_margin, y, width - x_margin, y)
+    y -= 18
+
+    c.setFont("Helvetica-Bold", 10)
+    c.drawRightString(x_margin + 360, y, "Total compra (L.):")
+    c.drawRightString(x_margin + 460, y, f"L. {compra.total:.2f}")
+    y -= 25
+
+    c.setFont("Helvetica-Oblique", 9)
+    c.drawString(x_margin, y, "Comprobante generado por BiblioNet.")
+
+    c.showPage()
+    c.save()
+
+    pdf = buffer.getvalue()
+    buffer.close()
+
+    filename = f"comprobante_{compra.numero_factura}.pdf"
+    response = HttpResponse(content_type="application/pdf")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.write(pdf)
+    return response

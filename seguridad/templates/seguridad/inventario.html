@@ -14,28 +14,19 @@
     <!-- Navbar -->
     <nav class="navbar navbar-expand-lg navbar-dark navbar-custom">
         <div class="container">
-             <a class="navbar-brand d-flex align-items-center">
+            <a class="navbar-brand d-flex align-items-center">
                 <img src="{% static 'imagenes/logo.jpg' %}" alt="Logo BiblioNet" class="me-2 brand-logo">
                 <span class="brand-text">BiblioNet</span>
             </a>
             
-            
             <div class="navbar-nav ms-auto">
                 <div class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle d-flex align-items-center nav-link-custom"
-                    href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                    {% if usuario_actual.foto_perfil %}
-                        <img src="{{ usuario_actual.foto_perfil.url }}"
-                        alt="Usuario"
-                        class="rounded-circle me-2 user-avatar"
-                        style="object-fit: cover;">
-                    {% else %}
+                    <a class="nav-link dropdown-toggle d-flex align-items-center nav-link-custom" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                         <img src="{% static 'imagenes/foto_perfil.jpeg' %}" alt="Usuario" class="rounded-circle me-2 user-avatar">
-                    {% endif %}
-                    <span class="user-name">{{ usuario_actual.nombre }} {{ usuario_actual.apellido }}</span>
+                        <span class="user-name">{{ usuario_actual.nombre }} {{ usuario_actual.apellido }}</span>
                     </a>
                     <ul class="dropdown-menu dropdown-menu-end">
-                        <li><a class="dropdown-item" href="{% url 'mi_perfil' %}"><i class="fas fa-user-edit me-2"></i>Mi Perfil</a></li>
+                        <li><a class="dropdown-item" href="#"><i class="fas fa-user-edit me-2"></i>Mi Perfil</a></li>
                         <li><a class="dropdown-item" href="#"><i class="fas fa-cog me-2"></i>Configuración</a></li>
                         <li><hr class="dropdown-divider"></li>
                         <li>
@@ -45,7 +36,7 @@
                         </li>
                     </ul>
                 </div>
-            </div>                   
+            </div>
         </div>
     </nav>
 
@@ -64,7 +55,7 @@
     <header class="header-inventario text-center">
         <div class="container">
             <div class="row justify-content-center">
-                <div class="col-lg-8">    
+                <div class="col-lg-8">
                     <h1 class="catalog-title">
                         <i class="fas fa-boxes me-2"></i>
                         busca y agrega nuevos libros
@@ -85,21 +76,18 @@
                     </a>
                 </div>
                 <div class="col-md-3 mb-3">
-                    <a href="{% url 'inventario' %}" class="btn btn-inventario w-100 btn-action active">
+                    <a href="{% url 'inventario' %}" class="btn btn-inventario w-100 btn-action">
                         <i class="fas fa-boxes me-2"></i>
                         Gestionar Inventario
                     </a>
                 </div>
                 <div class="col-md-3 mb-3">
-                    <a href="#" class="btn btn-venta w-100 btn-action">
+                    <a href="{% url 'realizar_venta' %}" class="btn btn-venta w-100 btn-action">
                         <i class="fas fa-cash-register me-2"></i>
                         Realizar Venta
                     </a>
                 </div>
-
-        
                 <div class="col-md-3 mb-3 mx-auto">
-                    <!-- AQUÍ YA REDIRIGE A GESTIÓN DE PRÉSTAMOS -->
                     <a href="{% url 'gestion_prestamos' %}" class="btn btn-prestamo w-100 btn-action">
                         <i class="fas fa-book me-2"></i>
                         Gestión de préstamos
@@ -126,8 +114,8 @@
                                     <div class="filter-group">
                                         <label class="filter-label">Buscar libros</label>
                                         <div class="input-group search-group-improved">
-                                            <input type="text" class="form-control search-input-improved" name="q" 
-                                                   placeholder="Buscar por título, autor, ISBN o categoría..." 
+                                            <input type="text" class="form-control search-input-improved" name="q"
+                                                   placeholder="Buscar por título, autor, ISBN o categoría..."
                                                    value="{{ query }}">
                                             <button class="btn btn-search-improved" type="submit">
                                                 <i class="fas fa-search"></i> Buscar
@@ -164,6 +152,10 @@
                                         <th>Editorial</th>
                                         <th>Año Publicación</th>
                                         <th>Stock</th>
+                                        <!-- NUEVO: Precio e Impuesto -->
+                                        <th>Precio (L)</th>
+                                        <th>Impuesto (%)</th>
+                                        <!-- FIN NUEVO -->
                                         <th>Fecha Registro</th>
                                         <th>Acciones</th>
                                     </tr>
@@ -195,6 +187,14 @@
                                                 <span class="badge bg-danger">{{ libro.stock_total }}</span>
                                             {% endif %}
                                         </td>
+                                        <!-- Mostrar precio e impuesto -->
+                                        <td>
+                                            L. {{ libro.precio_venta|default_if_none:"0.00"|floatformat:2 }}
+                                        </td>
+                                        <td>
+                                            {{ libro.impuesto_porcentaje|default_if_none:"0.00"|floatformat:2 }}%
+                                        </td>
+                                        <!-- Fin precio e impuesto -->
                                         <td>
                                             {% if libro.fecha_registro %}
                                                 {{ libro.fecha_registro|date:"d/m/Y" }}
@@ -204,18 +204,20 @@
                                         </td>
                                         <td>
                                             <div class="btn-group">
-                                                <button type="button" class="btn btn-sm btn-outline-primary" 
-                                                        data-bs-toggle="modal" 
+                                                <button type="button" class="btn btn-sm btn-outline-primary"
+                                                        data-bs-toggle="modal"
                                                         data-bs-target="#editarLibroModal"
                                                         onclick="cargarDatosLibro(
                                                             '{{ libro.id }}',
                                                             '{{ libro.isbn }}',
-                                                            '{{ libro.titulo }}',
-                                                            '{{ libro.autor }}',
-                                                            '{{ libro.categoria }}',
-                                                            '{{ libro.editorial }}',
+                                                            '{{ libro.titulo|escapejs }}',
+                                                            '{{ libro.autor|escapejs }}',
+                                                            '{{ libro.categoria|default_if_none:""|escapejs }}',
+                                                            '{{ libro.editorial|default_if_none:""|escapejs }}',
                                                             '{{ libro.anio_publicacion }}',
-                                                            '{{ libro.stock_total }}'
+                                                            '{{ libro.stock_total }}',
+                                                            '{{ libro.precio_venta|default_if_none:"" }}',
+                                                            '{{ libro.impuesto_porcentaje|default_if_none:"" }}'
                                                         )">
                                                     <i class="fas fa-edit"></i>
                                                 </button>
@@ -224,7 +226,8 @@
                                     </tr>
                                     {% empty %}
                                     <tr>
-                                        <td colspan="10" class="text-center">
+                                        <!-- ahora hay 12 columnas -->
+                                        <td colspan="12" class="text-center">
                                             {% if query %}
                                                 No se encontraron libros para "{{ query }}"
                                             {% else %}
@@ -242,9 +245,9 @@
                             <div class="text-muted">
                                 {% if page_obj.paginator.count > 0 %}
                                     {% if query %}
-                                        Mostrando {{ page_obj.start_index }}–{{ page_obj.end_index }} de {{ page_obj.paginator.count }} resultado(s) para "{{ query }}"
+                                        Mostrando {{ page_obj.start_index }}-{{ page_obj.end_index }} de {{ page_obj.paginator.count }} resultado(s) para "{{ query }}"
                                     {% else %}
-                                        Mostrando {{ page_obj.start_index }}–{{ page_obj.end_index }} de {{ page_obj.paginator.count }} libro(s)
+                                        Mostrando {{ page_obj.start_index }}-{{ page_obj.end_index }} de {{ page_obj.paginator.count }} libro(s)
                                     {% endif %}
                                 {% else %}
                                     {% if query %}
@@ -315,10 +318,10 @@
                         <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label for="isbn" class="form-label">ISBN</label>
-                                <input type="text" class="form-control" id="isbn" name="isbn" 
-                                pattern="^\d{13}$" 
-                                title="El ISBN debe contener exactamente 13 dígitos numéricos sin espacios"
-                                required>
+                                <input type="text" class="form-control" id="isbn" name="isbn"
+                                       pattern="^\d{13}$" 
+                                       title="El ISBN debe contener exactamente 13 dígitos numéricos sin espacios"
+                                       required>
                                 <div class="form-text">Ingrese el código ISBN de 13 dígitos (solo números)</div>
                             </div>
                             <div class="col-md-6 mb-3">
@@ -340,9 +343,16 @@
                                     <option value="misterio">Misterio</option>
                                 </select>
                             </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="editorial" class="form-label">Editorial</label>
-                                <input type="text" class="form-control" id="editorial" name="editorial" required>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Editorial</label>
+                                <input
+                                    type="text"
+                                    name="editorial"
+                                    class="form-control"
+                                    list="lista-editoriales"
+                                    value="{{ editorial_preseleccionada }}"
+                                    placeholder="Escribe o selecciona una editorial..."
+                                >
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label for="anio_publicacion" class="form-label">Año de Publicación</label>
@@ -352,6 +362,18 @@
                                 <label for="stock" class="form-label">Stock</label>
                                 <input type="number" class="form-control" id="stock" name="stock" min="0" required>
                             </div>
+                            <!-- NUEVOS CAMPOS: precio e impuesto -->
+                            <div class="col-md-6 mb-3">
+                                <label for="precio_venta" class="form-label">Precio de venta (L)</label>
+                                <input type="number" class="form-control" id="precio_venta" name="precio_venta" min="0" step="0.01" required>
+                                <div class="form-text">Precio al público en Lempiras.</div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="impuesto_porcentaje" class="form-label">Impuesto (%)</label>
+                                <input type="number" class="form-control" id="impuesto_porcentaje" name="impuesto_porcentaje" min="0" max="100" step="0.01" value="15">
+                                <div class="form-text">Porcentaje de ISV aplicado (ej. 15).</div>
+                            </div>
+                            <!-- FIN NUEVOS CAMPOS -->
                             <div class="col-md-6 mb-3">
                                 <label for="portada" class="form-label">Portada (JPG, JPEG o PNG)</label>
                                 <input type="file" class="form-control" id="portada" name="portada"
@@ -417,9 +439,16 @@
                                     <option value="misterio">Misterio</option>
                                 </select>
                             </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="edit_editorial" class="form-label">Editorial</label>
-                                <input type="text" class="form-control" id="edit_editorial" name="editorial" required>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Editorial</label>
+                                <input
+                                    type="text"
+                                    name="editorial"
+                                    class="form-control"
+                                    list="lista-editoriales"
+                                    value="{{ libro.editorial }}"
+                                    placeholder="Escribe o selecciona una editorial..."
+                                >
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label for="edit_anio_publicacion" class="form-label">Año de Publicación</label>
@@ -429,6 +458,16 @@
                                 <label for="edit_stock" class="form-label">Stock</label>
                                 <input type="number" class="form-control" id="edit_stock" name="stock" min="0" required>
                             </div>
+                            <!-- NUEVOS CAMPOS EN EDICIÓN -->
+                            <div class="col-md-6 mb-3">
+                                <label for="edit_precio_venta" class="form-label">Precio de venta (L)</label>
+                                <input type="number" class="form-control" id="edit_precio_venta" name="precio_venta" min="0" step="0.01" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="edit_impuesto_porcentaje" class="form-label">Impuesto (%)</label>
+                                <input type="number" class="form-control" id="edit_impuesto_porcentaje" name="impuesto_porcentaje" min="0" max="100" step="0.01">
+                            </div>
+                            <!-- FIN NUEVOS CAMPOS -->
                             <div class="col-md-6 mb-3">
                                 <label for="edit_portada" class="form-label">Portada (JPG, JPEG o PNG)</label>
                                 <input type="file" class="form-control" id="edit_portada" name="portada"
@@ -452,7 +491,7 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     
     <script>
-    function cargarDatosLibro(id, isbn, titulo, autor, categoria, editorial, anio, stock) {
+    function cargarDatosLibro(id, isbn, titulo, autor, categoria, editorial, anio, stock, precio, impuesto) {
         document.getElementById('edit_libro_id').value = id;
         document.getElementById('edit_isbn').value = isbn;
         document.getElementById('edit_titulo').value = titulo;
@@ -461,7 +500,15 @@
         document.getElementById('edit_editorial').value = editorial;
         document.getElementById('edit_anio_publicacion').value = anio;
         document.getElementById('edit_stock').value = stock;
+        document.getElementById('edit_precio_venta').value = precio || '';
+        document.getElementById('edit_impuesto_porcentaje').value = impuesto || '';
     }
     </script>
 </body>
+<datalist id="lista-editoriales">
+    {% for e in editoriales %}
+        <option value="{{ e }}"></option>
+    {% endfor %}
+</datalist>
+
 </html>
