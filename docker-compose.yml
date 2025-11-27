@@ -7,47 +7,47 @@ services:
     command: python manage.py runserver 0.0.0.0:8000
     ports:
       - "8000:8000"
+    environment:
+      SECRET_KEY: "biblio1"
+      DEBUG: "True"
+      DB_NAME: "biblionet"
+      DB_USER: "biblio"
+      DB_PASSWORD: "Proyecto1"
+      DB_HOST: "db"
+      DB_PORT: "3306"
+      TIME_ZONE: "America/Tegucigalpa"
     volumes:
       - .:/app
-    env_file:
-      - .env
+    depends_on:
+      - db
+
+  db:
+    image: mysql:8.0
+    container_name: biblionet_v3_db
+    restart: always
     environment:
-      # sobreescribir .env dentro del container
-      DB_HOST: host.docker.internal
-
-
-# Servicio para ejecutar los tests de Django
-  tests:
-    build: . # Usa el mismo Dockerfile que 'web' para tener el entorno Python/Django
-    container_name: biblionet_v3_tests
-    # Comando estándar de Django para correr todos los tests
-    command: python manage.py test
+      MYSQL_DATABASE: "biblionet"
+      MYSQL_USER: "biblio"
+      MYSQL_PASSWORD: "Proyecto1"
+      MYSQL_ROOT_PASSWORD: "rootpass"
+    ports:
+      - "3307:3306"
     volumes:
-      - .:/app # Monta el código fuente, incluyendo la carpeta de tests
-    env_file:
-      - .env
-    environment:
-      # Reusa DB_HOST para que los tests puedan encontrar la base de datos
-      DB_HOST: host.docker.internal
-    # Si la base de datos local está activa, depende de ella:
-    # Si la DB está en un contenedor, debes descomentar 'db' abajo y esta dependencia:
-    # depends_on:
-    #   - db
-    
-  # docker default sin usar base local
-  # db:
-  #   image: mysql:8.0
-  #   container_name: biblionet_v3_db
-  #   restart: always
-  #   environment:
-  #     MYSQL_DATABASE: ${DB_NAME}
-  #     MYSQL_USER: ${DB_USER}
-  #     MYSQL_PASSWORD: ${DB_PASSWORD}
-  #     MYSQL_ROOT_PASSWORD: root
-  #   ports:
-  #     - "3307:3306"
-  #   volumes:
-  #     - db_data:/var/lib/mysql
+      - db_data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d
 
-#volumes:
-#  db_data:
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: biblionet_v3_pma
+    restart: always
+    environment:
+      PMA_HOST: db
+      PMA_USER: "biblio"
+      PMA_PASSWORD: "Proyecto1"
+    ports:
+      - "8081:80"
+    depends_on:
+      - db
+
+volumes:
+  db_data:
